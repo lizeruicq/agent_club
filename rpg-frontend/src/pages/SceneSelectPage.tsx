@@ -17,7 +17,9 @@ export const SceneSelectPage = ({ config, onSceneChange }: SceneSelectPageProps)
     if (sceneKey === config.currentScene) return
     setSaving(true)
     try {
-      const updated = await api.updateCurrentScene(sceneKey)
+      await api.updateCurrentScene(sceneKey)
+      // 前端本地更新 currentScene，保留完整的 scenes 配置
+      const updated = { ...config, currentScene: sceneKey }
       onSceneChange(updated)
     } catch (err) {
       console.error('Failed to switch scene:', err)

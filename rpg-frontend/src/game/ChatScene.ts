@@ -81,6 +81,11 @@ export class ChatScene extends Scene {
     // Tiled 地图
     this.load.tilemapTiledJSON(sceneCfg.key, sceneCfg.mapPath)
     this.load.image(sceneCfg.tilesetImageKey, sceneCfg.tilesetImagePath)
+    if (sceneCfg.additionalTilesets) {
+      for (const ts of sceneCfg.additionalTilesets) {
+        this.load.image(ts.imageKey, ts.imagePath)
+      }
+    }
 
     // 帧动画精灵图
     Object.values(this.config.characters).forEach(char => {
@@ -140,14 +145,24 @@ export class ChatScene extends Scene {
     this.mapWidth = map.widthInPixels || 720
     this.mapHeight = map.heightInPixels || 480
 
-    const tileset = map.addTilesetImage(sceneCfg.tilesetName, sceneCfg.tilesetImageKey)
-    if (tileset) {
+    // 注册所有 tileset（主 tileset + 额外 tilesets）
+    const tilesets: Phaser.Tilemaps.Tileset[] = []
+    const mainTs = map.addTilesetImage(sceneCfg.tilesetName, sceneCfg.tilesetImageKey)
+    if (mainTs) tilesets.push(mainTs)
+    if (sceneCfg.additionalTilesets) {
+      for (const tsCfg of sceneCfg.additionalTilesets) {
+        const ts = map.addTilesetImage(tsCfg.name, tsCfg.imageKey)
+        if (ts) tilesets.push(ts)
+      }
+    }
+
+    if (tilesets.length > 0) {
       this.sceneScale = Math.min(
         this.cameras.main.width / this.mapWidth,
         this.cameras.main.height / this.mapHeight
       )
 
-      const layers = sceneCfg.layers.map(name => map.createLayer(name, tileset))
+      const layers = sceneCfg.layers.map(name => map.createLayer(name, tilesets))
 
       const scaledW = this.mapWidth * this.sceneScale
       const scaledH = this.mapHeight * this.sceneScale
@@ -422,6 +437,7 @@ export class ChatScene extends Scene {
     this.moveTweens.clear()
     this.agentStates.clear()
     this.agentDirections.clear()
+    this.agentMapPositions.clear()
     this.selectedAgent = null
     this.selectionRing?.destroy()
     this.selectionRing = null

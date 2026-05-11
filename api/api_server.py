@@ -42,6 +42,7 @@ GAME_CONFIG_PATH = os.path.join(
 
 # ============== Per-user Session 管理 ==============
 from api.session_manager import session_manager, UserSession
+from auth.user_data import get_user_data
 
 # ============== 命令行参数 ==============
 parser = argparse.ArgumentParser(description="RPG Chat API Server")
@@ -167,11 +168,31 @@ async def lifespan(app: FastAPI):
 
 
 def _get_scene_description(session: UserSession) -> str:
-    """读取 game-config.json 获取当前场景描述（per-user 场景状态）。
+    """读取当前场景描述（优先从用户配置文件读取，回退到公共配置）。
 
     只在场景切换或描述内容变化时返回描述，避免同一场景下重复注入。
     """
     try:
+        # 优先从用户配置文件读取当前场景
+        user_data = get_user_data(session.user_id)
+        user_config_path = user_data.game_config_file
+        config = None
+        if os.path.exists(user_config_path):
+            with open(user_config_path, "r", encoding="utf-8") as f:
+                user_config = json.load(f)
+            current_scene_key = user_config.get("currentScene", "")
+            scenes = user_config.get("scenes", {})
+            scene = scenes.get(current_scene_key, {})
+            desc = scene.get("description", "")
+            if desc:
+                # 场景未变化且描述未变化，不需要重新注入
+                if current_scene_key == session.last_scene_key and desc == session.last_scene_desc:
+                    return ""
+                session.last_scene_key = current_scene_key
+                session.last_scene_desc = desc
+                return desc
+
+        # 回退到公共配置
         if not os.path.exists(GAME_CONFIG_PATH):
             session.last_scene_key = None
             session.last_scene_desc = None

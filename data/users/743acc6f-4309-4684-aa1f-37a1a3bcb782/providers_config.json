@@ -1,0 +1,17 @@
+{
+  "providers": [
+    {
+      "id": "provider",
+      "name": "qwen3.5",
+      "provider_type": "dashscope",
+      "base_url": "",
+      "api_key": "sk-5ff8523713e14bbe92521a9a9fb0abe8",
+      "model_id": "qwen3.5-flash",
+      "model_name": "qwen3.5-flash",
+      "is_active": false
+    }
+  ],
+  "active_provider_id": null,
+  "active_embedding_provider_id": null,
+  "version": "1.0"
+}

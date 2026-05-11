@@ -1,5 +1,5 @@
 {
-  "currentScene": "library",
+  "currentScene": "office",
   "maxAgents": 10,
   "scenes": {
     "library": {
@@ -9,7 +9,34 @@
       "tilesetName": "libassetpack-tiled",
       "tilesetImagePath": "/assets/maps/libmap.png",
       "tilesetImageKey": "libmap",
-      "layers": ["ground", "decorate", "items", "items2", "item3"],
+      "layers": [
+        "ground",
+        "decorate",
+        "items",
+        "items2",
+        "item3"
+      ],
+      "collisionLayer": "collisions"
+    },
+    "office": {
+      "key": "office",
+      "description": "这是一间现代化的开放式办公室，简洁的桌椅整齐排列，白板上写满了灵感与计划。这里是团队协作的核心，键盘敲击声与讨论声交织，充满了创造力与效率的气息。",
+      "mapPath": "/assets/maps/office.tmj",
+      "tilesetName": "Interiors_free_32x32",
+      "tilesetImagePath": "/assets/maps/Interiors_free_32x32.png",
+      "tilesetImageKey": "Interiors_free_32x32",
+      "additionalTilesets": [
+        {
+          "name": "Room_Builder_free_32x32",
+          "imagePath": "/assets/maps/Room_Builder_free_32x32.png",
+          "imageKey": "Room_Builder_free_32x32"
+        }
+      ],
+      "layers": [
+        "ground",
+        "item1",
+        "item2"
+      ],
       "collisionLayer": "collisions"
     }
   },

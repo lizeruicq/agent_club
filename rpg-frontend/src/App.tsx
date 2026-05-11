@@ -142,11 +142,27 @@ function App() {
   const [gameConfig, setGameConfig] = useState<GameConfig | null>(null)
 
   // 加载游戏配置（登录后才加载）
+  // 以前端本地 game-config.json 为准，只用后端的 currentScene 覆盖
   useEffect(() => {
     if (!isLoggedIn) return
-    api.getGameConfig()
-      .then(cfg => setGameConfig(cfg))
-      .catch(err => console.error('Failed to load game config:', err))
+    const loadConfig = async () => {
+      try {
+        const localResp = await fetch('/assets/game-config.json')
+        const localConfig = await localResp.json() as GameConfig
+        try {
+          const serverConfig = await api.getGameConfig()
+          if (serverConfig.currentScene && localConfig.scenes[serverConfig.currentScene]) {
+            localConfig.currentScene = serverConfig.currentScene
+          }
+        } catch (err) {
+          console.warn('Server game-config unavailable, using local only:', err)
+        }
+        setGameConfig(localConfig)
+      } catch (err) {
+        console.error('Failed to load game config:', err)
+      }
+    }
+    loadConfig()
   }, [isLoggedIn])
 
   // 同步agents状态到ref，确保Phaser初始化时能获取最新值

@@ -27,6 +27,12 @@ export interface CharacterConfig {
   }
 }
 
+export interface TilesetConfig {
+  name: string
+  imagePath: string
+  imageKey: string
+}
+
 export interface SceneConfig {
   key: string
   description?: string
@@ -34,6 +40,7 @@ export interface SceneConfig {
   tilesetName: string
   tilesetImagePath: string
   tilesetImageKey: string
+  additionalTilesets?: TilesetConfig[]
   layers: string[]
   collisionLayer: string
 }
