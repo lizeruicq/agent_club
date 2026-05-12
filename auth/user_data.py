@@ -66,6 +66,13 @@ class UserDataService:
     def game_config_file(self) -> str:
         return os.path.join(self._data_dir, "game_config.json")
 
+    @property
+    def conversations_dir(self) -> str:
+        """历史会话目录，每个会话存一个 JSON 文件"""
+        path = os.path.join(self._data_dir, "conversations")
+        os.makedirs(path, exist_ok=True)
+        return path
+
     def init_default_data(self):
         """初始化默认用户数据（首次注册时调用）"""
         # 创建空 agents 配置

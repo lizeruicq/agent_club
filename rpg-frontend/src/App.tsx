@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import Phaser from 'phaser'
 import { ChatScene } from './game/ChatScene'
 import { ChatInput } from './components/ChatInput'
+import { ConversationHistory } from './components/ConversationHistory'
 import { AgentConfigPage } from './pages/AgentConfigPage'
 import { ProviderConfigPage } from './pages/ProviderConfigPage'
 import { ToolConfigPage } from './pages/ToolConfigPage'
@@ -230,6 +231,11 @@ function App() {
   // 聊天窗口尺寸状态: normal(小窗) | expanded(全屏) | hidden(隐藏)
   const [chatSize, setChatSize] = useState<ChatSize>('normal')
 
+  // 历史会话弹层
+  const [historyOpen, setHistoryOpen] = useState(false)
+  // 当前会话来自哪条历史；null = 全新对话（保存时会 create），非空 = 恢复自历史（保存时会 update）
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null)
+
   // 获取 Agent 列表（登录后才获取）
   useEffect(() => {
     if (!isLoggedIn) return
@@ -438,6 +444,86 @@ function App() {
     })
   }, [robotStatus, activeAgents])
 
+  // ========== 历史会话相关 ==========
+
+  // 持久化当前会话到历史；返回是否成功
+  // - 没有消息：跳过（不创建空会话）
+  // - 已绑定到某条历史：更新该条
+  // - 未绑定：创建新一条
+  const persistCurrentToHistory = useCallback(async (): Promise<boolean> => {
+    if (messages.length === 0) return true
+    try {
+      if (currentConversationId) {
+        try {
+          await api.updateConversation(currentConversationId, messages)
+          return true
+        } catch (err: any) {
+          // 如果原会话已被删除，回退到创建
+          if (err?.response?.status !== 404) throw err
+        }
+      }
+      let result = await api.saveCurrentConversation(messages, false)
+      if (result.requiresConfirmation) {
+        const oldestTitle = result.oldest?.title || '最早的会话'
+        const ok = window.confirm(
+          `历史会话已达上限（${result.max} 条）。\n继续将删除最早的会话「${oldestTitle}」。\n是否继续？`
+        )
+        if (!ok) return false
+        result = await api.saveCurrentConversation(messages, true)
+      }
+      return true
+    } catch (err) {
+      console.error('Persist conversation failed:', err)
+      alert('保存当前对话失败: ' + (err as Error).message)
+      return false
+    }
+  }, [messages, currentConversationId])
+
+  // 新对话：把当前持久化为历史 → 清空 messages + agent 记忆
+  const handleNewConversation = useCallback(async () => {
+    if (isProcessing) {
+      alert('请等待当前回复完成')
+      return
+    }
+    const saved = await persistCurrentToHistory()
+    if (!saved) return
+    try {
+      await api.reinitializeSystem()
+    } catch (err) {
+      console.warn('Reinitialize failed:', err)
+    }
+    setMessages([])
+    setCurrentConversationId(null)
+  }, [isProcessing, persistCurrentToHistory])
+
+  // 选中历史会话：把当前持久化 → restore 选中条 → 用快照覆盖前端状态
+  const handleSelectConversation = useCallback(async (convId: string) => {
+    if (isProcessing) {
+      alert('请等待当前回复完成')
+      return
+    }
+    const saved = await persistCurrentToHistory()
+    if (!saved) return
+    try {
+      const restored = await api.restoreConversation(convId)
+      setMessages(restored.messages || [])
+      setCurrentConversationId(restored.id)
+      if (restored.game_config) {
+        setGameConfig(restored.game_config as GameConfig)
+      }
+      try {
+        const agentList = await api.getAgents()
+        setAgents(agentList)
+      } catch (err) {
+        console.warn('Refresh agents after restore failed:', err)
+      }
+      setHistoryOpen(false)
+    } catch (err) {
+      console.error('Restore conversation failed:', err)
+      alert('恢复对话失败: ' + (err as Error).message)
+    }
+  }, [isProcessing, persistCurrentToHistory])
+
   // 未登录时显示登录页
   if (!isLoggedIn) {
     return <LoginPage onLoginSuccess={handleLoginSuccess} />
@@ -546,6 +632,22 @@ function App() {
                   <span className="message-count">{messages.length} 条消息</span>
                 </div>
                 <div className="chat-window-controls">
+                  {/* 新对话 */}
+                  <button
+                    className="window-ctrl-btn"
+                    onClick={handleNewConversation}
+                    title="新对话（保存当前后清空）"
+                  >
+                    ✨
+                  </button>
+                  {/* 历史会话 */}
+                  <button
+                    className="window-ctrl-btn"
+                    onClick={() => setHistoryOpen(true)}
+                    title="历史会话"
+                  >
+                    📚
+                  </button>
                   {/* 最小化（隐藏） */}
                   <button
                     className="window-ctrl-btn"
@@ -647,6 +749,15 @@ function App() {
         {currentPage === 'preview' && <HtmlPreviewPage />}
         {currentPage === 'plaza' && <PlazaPage />}
       </main>
+
+      <ConversationHistory
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        onSelect={handleSelectConversation}
+        onDeleted={(id) => {
+          if (id === currentConversationId) setCurrentConversationId(null)
+        }}
+      />
     </div>
   )
 }

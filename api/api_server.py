@@ -32,6 +32,7 @@ from api.manager_api import router as manager_router
 from api.skills_api import router as skills_router
 from api.game_config_api import router as game_config_router
 from api.html_preview_api import router as html_preview_router
+from api.conversations_api import router as conversations_router
 from skills import skill_registry
 
 # ============== 游戏配置路径 ==============
@@ -281,6 +282,9 @@ app.include_router(game_config_router)
 
 # 添加 HTML 预览路由
 app.include_router(html_preview_router)
+
+# 添加历史会话路由
+app.include_router(conversations_router)
 
 # 添加认证路由
 from auth.router import router as auth_router

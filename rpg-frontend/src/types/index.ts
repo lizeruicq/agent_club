@@ -14,6 +14,21 @@ export interface ChatMessage {
   agentRole?: string  // Agent 角色
 }
 
+// ========== 历史会话类型 ==========
+
+export interface ConversationMeta {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+  message_count: number
+}
+
+export interface ConversationDetail extends ConversationMeta {
+  messages: ChatMessage[]
+  snapshots?: Record<string, any>
+}
+
 // ========== 多 Agent 系统类型 ==========
 
 export interface AgentInfo {

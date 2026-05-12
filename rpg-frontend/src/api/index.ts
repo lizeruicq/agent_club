@@ -1,6 +1,7 @@
 import axios from 'axios'
 import type {
   ChatResponse,
+  ChatMessage,
   AgentInfo,
   AgentResponse,
   AgentConfig,
@@ -16,6 +17,8 @@ import type {
   ManagerConfig,
   Skill,
   HtmlFileInfo,
+  ConversationMeta,
+  ConversationDetail,
 } from '../types'
 import type { GameConfig } from '../game/config'
 
@@ -127,6 +130,71 @@ export const api = {
   async getAgents(): Promise<AgentInfo[]> {
     const response = await client.get<{ agents: AgentInfo[] }>('/agents')
     return response.data.agents
+  },
+
+  // ========== 历史会话 API ==========
+
+  async listConversations(): Promise<{ conversations: ConversationMeta[]; max: number }> {
+    const response = await client.get<{ conversations: ConversationMeta[]; max: number }>('/conversations')
+    return response.data
+  },
+
+  /**
+   * 保存当前消息+配置为新会话。
+   * 当达到 max 上限时后端返回 409，返回值中 requiresConfirmation=true 让调用方弹确认框，
+   * 然后用 confirmDeleteOldest=true 重试，会删除最旧会话再创建。
+   */
+  async saveCurrentConversation(
+    messages: ChatMessage[],
+    confirmDeleteOldest: boolean = false
+  ): Promise<{
+    conversation?: ConversationMeta
+    requiresConfirmation?: boolean
+    oldest?: ConversationMeta
+    max?: number
+  }> {
+    try {
+      const response = await client.post<{ conversation: ConversationMeta }>(
+        '/conversations',
+        { messages, confirm_delete_oldest: confirmDeleteOldest }
+      )
+      return { conversation: response.data.conversation }
+    } catch (err: any) {
+      if (err.response?.status === 409 && err.response.data?.detail?.requires_confirmation) {
+        const d = err.response.data.detail
+        return { requiresConfirmation: true, oldest: d.oldest, max: d.max }
+      }
+      throw err
+    }
+  },
+
+  /**
+   * 更新已有历史会话的消息与快照（title 不变）。
+   * 当前会话是从某条历史恢复来的，再次切换/新建时调用此接口而不是 saveCurrentConversation。
+   */
+  async updateConversation(
+    convId: string,
+    messages: ChatMessage[]
+  ): Promise<{ conversation: ConversationMeta }> {
+    const response = await client.put<{ conversation: ConversationMeta }>(
+      `/conversations/${convId}`,
+      { messages }
+    )
+    return response.data
+  },
+
+  async deleteConversation(convId: string): Promise<void> {
+    await client.delete(`/conversations/${convId}`)
+  },
+
+  async restoreConversation(convId: string): Promise<{
+    id: string
+    title: string
+    messages: ChatMessage[]
+    game_config: any
+  }> {
+    const response = await client.post(`/conversations/${convId}/restore`)
+    return response.data
   },
 
   // ========== Agent 配置 API（每个 Agent 独立配置） ==========
