@@ -641,8 +641,6 @@ function App() {
             config={gameConfig}
             onSceneChange={(newConfig) => {
               setGameConfig(newConfig)
-              // 切回聊天页自动重建场景
-              setCurrentPage('chat')
             }}
           />
         )}

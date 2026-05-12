@@ -15,12 +15,15 @@ export const SceneSelectPage = ({ config, onSceneChange }: SceneSelectPageProps)
 
   const handleSelect = async (sceneKey: string) => {
     if (sceneKey === config.currentScene) return
+    const sceneName = config.scenes[sceneKey]?.key || sceneKey
+    if (!window.confirm(`确定要切换到场景 "${sceneName}" 吗？`)) return
     setSaving(true)
     try {
       await api.updateCurrentScene(sceneKey)
       // 前端本地更新 currentScene，保留完整的 scenes 配置
       const updated = { ...config, currentScene: sceneKey }
       onSceneChange(updated)
+      alert(`已切换到场景 "${sceneName}"`)
     } catch (err) {
       console.error('Failed to switch scene:', err)
       alert('场景切换失败')
