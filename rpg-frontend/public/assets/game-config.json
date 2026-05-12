@@ -16,7 +16,11 @@
         "items2",
         "item3"
       ],
-      "collisionLayer": "collisions"
+      "collisionLayer": "collisions",
+      "characterScales": {
+        "worker1": 6,
+        "manager": 6
+      }
     },
     "office": {
       "key": "office",
@@ -37,7 +41,11 @@
         "item1",
         "item2"
       ],
-      "collisionLayer": "collisions"
+      "collisionLayer": "collisions",
+      "characterScales": {
+        "worker1": 3.2,
+        "manager": 3.2
+      }
     }
   },
   "characters": {

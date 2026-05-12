@@ -27,6 +27,7 @@ export class ChatScene extends Scene {
   private sceneScale = 1
   private mapWidth = 0
   private mapHeight = 0
+  private mapTileHeight = 24
   private mapLayers: Phaser.Tilemaps.TilemapLayer[] = []
   private collisionRects: Array<{ x: number; y: number; width: number; height: number }> = []
 
@@ -144,6 +145,7 @@ export class ChatScene extends Scene {
     // 先设置地图尺寸（不依赖 tileset 加载成功）
     this.mapWidth = map.widthInPixels || 720
     this.mapHeight = map.heightInPixels || 480
+    this.mapTileHeight = map.tileHeight || 24
 
     // 注册所有 tileset（主 tileset + 额外 tilesets）
     const tilesets: Phaser.Tilemaps.Tileset[] = []
@@ -261,6 +263,11 @@ export class ChatScene extends Scene {
     return this.anims.exists(`${baseKey}_idle_down`) || this.anims.exists(`${baseKey}_idle`)
   }
 
+  /** 计算小人脚底相对于容器中心的 Y 偏移（sprite anchor 为 0.5,0.5） */
+  private getFootOffsetY(body: Phaser.GameObjects.Sprite): number {
+    return Math.round(body.displayHeight / 2)
+  }
+
   // ========== 碰撞检测 ==========
 
   private isFootprintColliding(mapX: number, mapY: number): boolean {
@@ -376,11 +383,21 @@ export class ChatScene extends Scene {
     const npc = this.add.container(screenX, screenY)
 
     const charConfig = this.config.characters[charKey]
-    const scale = charConfig?.scale ?? 1.35
+    const baseScale = charConfig?.scale ?? 1.35
+
+    // 优先从当前场景配置读取 tileRelativeScale，次之回退到角色全局配置
+    const sceneCfg = this.config.scenes[this.config.currentScene]
+    let displayScale = baseScale
+    const sceneCharScale = sceneCfg?.characterScales?.[charKey]
+    if (sceneCharScale !== undefined && charConfig?.type === 'spritesheet' && charConfig.spritesheets) {
+      displayScale = (this.mapTileHeight * sceneCharScale) / charConfig.spritesheets.idle.frameHeight
+    } else if (charConfig?.tileRelativeScale !== undefined && charConfig.type === 'spritesheet' && charConfig.spritesheets) {
+      displayScale = (this.mapTileHeight * charConfig.tileRelativeScale) / charConfig.spritesheets.idle.frameHeight
+    }
 
     const body = this.add.sprite(0, 0, textureKey)
       .setOrigin(0.5, 0.5)
-      .setScale(scale)
+      .setScale(displayScale)
       .setInteractive({ cursor: 'pointer' })
 
     // 点击 NPC 选中/取消选中，阻止事件冒泡到地图
@@ -395,8 +412,10 @@ export class ChatScene extends Scene {
       if (animKey) body.play(animKey)
     }
 
+    // 动态计算阴影和名字标签偏移（根据小人实际显示高度）
+    const footOffset = this.getFootOffsetY(body)
     const shadowCfg = charConfig?.shadow ?? this.config.ui.selectionRing
-    const shadow = this.add.ellipse(0, shadowCfg.offsetY, shadowCfg.width, shadowCfg.height, 0x000000, 0.25)
+    const shadow = this.add.ellipse(0, footOffset + 2, shadowCfg.width, shadowCfg.height, 0x000000, 0.25)
 
     const nameOffsetY = charConfig?.nameLabelOffsetY ?? -70
     const nameBg = this.add.rectangle(0, nameOffsetY, 80, 22, 0x000000, 0.6)
@@ -594,8 +613,10 @@ export class ChatScene extends Scene {
     const npc = this.npcs.get(this.selectedAgent)
     if (!npc) return
 
+    const body = npc.getAt(1) as Phaser.GameObjects.Sprite
+    const footOffset = this.getFootOffsetY(body)
     const ringCfg = this.config.ui.selectionRing
-    this.selectionRing = this.add.ellipse(npc.x, npc.y + ringCfg.offsetY, ringCfg.width, ringCfg.height, 0xffd700, 0.6)
+    this.selectionRing = this.add.ellipse(npc.x, npc.y + footOffset-20, ringCfg.width, ringCfg.height, 0xffd700, 0.6)
       .setOrigin(0.5)
       .setStrokeStyle(2, 0xffa500)
       .setDepth(95)
@@ -665,9 +686,10 @@ export class ChatScene extends Scene {
         }
         // 同步光圈
         if (this.selectionRing && this.selectedAgent === name) {
-          const ringCfg = this.config.ui.selectionRing
+          const body = npc.getAt(1) as Phaser.GameObjects.Sprite
+          const footOffset = this.getFootOffsetY(body)
           this.selectionRing.x = npc.x
-          this.selectionRing.y = npc.y + ringCfg.offsetY
+          this.selectionRing.y = npc.y + footOffset -20
         }
       },
       onComplete: () => {
