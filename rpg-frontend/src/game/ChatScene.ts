@@ -206,12 +206,16 @@ export class ChatScene extends Scene {
 
       // idle / thinking / speaking 动画
       const idleKey = `${char.key}_idle`
+      let isSingleDirection = false
       if (this.textures.exists(idleKey)) {
         const texture = this.textures.get(idleKey)
         const source = texture.getSourceImage() as HTMLImageElement
         const cols = Math.floor(source.width / char.spritesheets.idle.frameWidth)
+        const rows = Math.floor(source.height / char.spritesheets.idle.frameHeight)
+        const maxRows = Math.min(4, rows)
+        isSingleDirection = rows <= 1
 
-        for (let row = 0; row < 4; row++) {
+        for (let row = 0; row < maxRows; row++) {
           const dir = DIRS[row]
           const start = row * cols
           const frames = this.anims.generateFrameNumbers(idleKey, { start, end: start + cols - 1 })
@@ -221,6 +225,17 @@ export class ChatScene extends Scene {
           this.anims.create({ key: `${char.key}_thinking_${dir}`, frames, frameRate: rate, repeat: -1 })
           this.anims.create({ key: `${char.key}_speaking_${dir}`, frames, frameRate: rate + 2, repeat: -1 })
         }
+
+        // 单方向角色额外注册无方向后缀的 key（用第一行帧），多方向角色不影响
+        if (isSingleDirection) {
+          const baseFrames = this.anims.generateFrameNumbers(idleKey, { start: 0, end: cols - 1 })
+          if (baseFrames && baseFrames.length > 0) {
+            const rate = char.spritesheets.idle.frameRate
+            this.anims.create({ key: `${char.key}_idle`, frames: baseFrames, frameRate: rate, repeat: -1 })
+            this.anims.create({ key: `${char.key}_thinking`, frames: baseFrames, frameRate: rate, repeat: -1 })
+            this.anims.create({ key: `${char.key}_speaking`, frames: baseFrames, frameRate: rate + 2, repeat: -1 })
+          }
+        }
       }
 
       // walk 动画
@@ -229,13 +244,23 @@ export class ChatScene extends Scene {
         const texture = this.textures.get(walkKey)
         const source = texture.getSourceImage() as HTMLImageElement
         const cols = Math.floor(source.width / char.spritesheets.walk.frameWidth)
+        const rows = Math.floor(source.height / char.spritesheets.walk.frameHeight)
+        const maxRows = Math.min(4, rows)
 
-        for (let row = 0; row < 4; row++) {
+        for (let row = 0; row < maxRows; row++) {
           const dir = DIRS[row]
           const start = row * cols
           const frames = this.anims.generateFrameNumbers(walkKey, { start, end: start + cols - 1 })
           if (!frames || frames.length === 0) continue
           this.anims.create({ key: `${char.key}_walk_${dir}`, frames, frameRate: char.spritesheets.walk.frameRate, repeat: -1 })
+        }
+
+        // 单方向角色额外注册无方向后缀的 walk key
+        if (rows <= 1) {
+          const baseFrames = this.anims.generateFrameNumbers(walkKey, { start: 0, end: cols - 1 })
+          if (baseFrames && baseFrames.length > 0) {
+            this.anims.create({ key: `${char.key}_walk`, frames: baseFrames, frameRate: char.spritesheets.walk.frameRate, repeat: -1 })
+          }
         }
       }
     })
@@ -244,14 +269,18 @@ export class ChatScene extends Scene {
   private getAnimKey(textureKey: string, state: string, direction?: string): string | null {
     const baseKey = textureKey.replace('_idle', '').replace('_walk', '')
     const suffix = direction ? `_${direction}` : ''
-    const key = `${baseKey}_${state}${suffix}`
-    return this.anims.exists(key) ? key : null
+    const dirKey = `${baseKey}_${state}${suffix}`
+    if (this.anims.exists(dirKey)) return dirKey
+    // 兼容只有单方向的帧动画：如果带方向的 key 不存在，尝试不带方向的基础 key
+    const baseAnimKey = `${baseKey}_${state}`
+    if (this.anims.exists(baseAnimKey)) return baseAnimKey
+    return null
   }
 
   private playAgentAnim(agentName: string, state: string, direction?: string) {
     const npc = this.npcs.get(agentName)
     if (!npc) return
-    const body = npc.getAt(1) as Phaser.GameObjects.Sprite
+    const body = npc.getAt(0) as Phaser.GameObjects.Sprite
     const animKey = this.getAnimKey(body.texture.key, state, direction)
     if (animKey && body.anims.currentAnim?.key !== animKey) {
       body.play(animKey)
@@ -259,7 +288,7 @@ export class ChatScene extends Scene {
   }
 
   private hasFrameAnim(textureKey: string): boolean {
-    const baseKey = textureKey.replace('_idle', '')
+    const baseKey = textureKey.replace('_idle', '').replace('_walk', '')
     return this.anims.exists(`${baseKey}_idle_down`) || this.anims.exists(`${baseKey}_idle`)
   }
 
@@ -400,6 +429,19 @@ export class ChatScene extends Scene {
       .setScale(displayScale)
       .setInteractive({ cursor: 'pointer' })
 
+    // 检测是否为单方向帧动画（只有一行帧），存入 sprite data 供后续翻转判断
+    let isSingleDirection = false
+    if (charConfig?.type === 'spritesheet' && charConfig.spritesheets) {
+      const tex = this.textures.get(textureKey)
+      if (tex) {
+        const source = tex.getSourceImage() as HTMLImageElement
+        const rows = Math.floor(source.height / charConfig.spritesheets.idle.frameHeight)
+        isSingleDirection = rows <= 1
+      }
+    }
+    body.setData('isSingleDirection', isSingleDirection)
+    body.setData('displayScale', displayScale)
+
     // 点击 NPC 选中/取消选中，阻止事件冒泡到地图
     body.on('pointerdown', (_pointer: Phaser.Input.Pointer, _localX: number, _localY: number, event: Phaser.Types.Input.EventData) => {
       event.stopPropagation()
@@ -412,11 +454,7 @@ export class ChatScene extends Scene {
       if (animKey) body.play(animKey)
     }
 
-    // 动态计算阴影和名字标签偏移（根据小人实际显示高度）
-    const footOffset = this.getFootOffsetY(body)
-    const shadowCfg = charConfig?.shadow ?? this.config.ui.selectionRing
-    const shadow = this.add.ellipse(0, footOffset + 2, shadowCfg.width, shadowCfg.height, 0x000000, 0.25)
-
+    // 动态计算名字标签偏移（根据小人实际显示高度）
     const nameOffsetY = charConfig?.nameLabelOffsetY ?? -70
     const nameBg = this.add.rectangle(0, nameOffsetY, 80, 22, 0x000000, 0.6)
     const nameLabel = this.add.text(0, nameOffsetY, name, {
@@ -425,7 +463,7 @@ export class ChatScene extends Scene {
       color: '#ffffff',
     }).setOrigin(0.5)
 
-    npc.add([shadow, body, nameBg, nameLabel])
+    npc.add([body, nameBg, nameLabel])
     npc.setDepth(100)
     this.npcs.set(name, npc)
 
@@ -519,7 +557,7 @@ export class ChatScene extends Scene {
     const npc = this.npcs.get(agentName)
     if (!npc) return
 
-    const body = npc.getAt(1) as Phaser.GameObjects.Sprite
+    const body = npc.getAt(0) as Phaser.GameObjects.Sprite
     const hasAnim = this.hasFrameAnim(body.texture.key)
     const dir = this.agentDirections.get(agentName) ?? 'down'
 
@@ -569,6 +607,19 @@ export class ChatScene extends Scene {
         }
         break
     }
+
+    // 单方向帧动画兼容：只有被标记为单方向的角色才通过水平翻转实现 left / right 朝向
+    // 多方向角色（girl / manager）完全不受影响
+    const isSingleDirection = body.getData('isSingleDirection') as boolean
+    if (isSingleDirection) {
+      const displayScale = body.getData('displayScale') as number
+      if (dir === 'left') {
+        body.setScale(-displayScale, displayScale)
+      } else if (dir === 'right') {
+        body.setScale(displayScale, displayScale)
+      }
+      // up/down 保持当前 scaleX（角色上下移动不翻转，维持上次水平朝向）
+    }
   }
 
   // ========== 移动与选中 ==========
@@ -613,7 +664,7 @@ export class ChatScene extends Scene {
     const npc = this.npcs.get(this.selectedAgent)
     if (!npc) return
 
-    const body = npc.getAt(1) as Phaser.GameObjects.Sprite
+    const body = npc.getAt(0) as Phaser.GameObjects.Sprite
     const footOffset = this.getFootOffsetY(body)
     const ringCfg = this.config.ui.selectionRing
     this.selectionRing = this.add.ellipse(npc.x, npc.y + footOffset-20, ringCfg.width, ringCfg.height, 0xffd700, 0.6)
@@ -686,7 +737,7 @@ export class ChatScene extends Scene {
         }
         // 同步光圈
         if (this.selectionRing && this.selectedAgent === name) {
-          const body = npc.getAt(1) as Phaser.GameObjects.Sprite
+          const body = npc.getAt(0) as Phaser.GameObjects.Sprite
           const footOffset = this.getFootOffsetY(body)
           this.selectionRing.x = npc.x
           this.selectionRing.y = npc.y + footOffset -20
@@ -696,17 +747,9 @@ export class ChatScene extends Scene {
         this.agentMapPositions.set(name, { x: targetMapX, y: targetMapY })
         this.moveTweens.delete(name)
 
-        // 移动完成：直接恢复 idle 动画，不经过 transitionState
+        // 移动完成：调用 applyStateVisuals 一锯子重置 idle 状态（含动画 + 方向翻转）
         this.agentStates.set(name, 'idle')
-        const body = npc.getAt(1) as Phaser.GameObjects.Sprite
-        const dir = this.agentDirections.get(name) ?? 'down'
-        const idleAnimKey = this.getAnimKey(body.texture.key, 'idle', dir)
-        if (idleAnimKey) {
-          body.play(idleAnimKey)
-        }
-        if (!this.hasFrameAnim(body.texture.key)) {
-          this.startIdleAnimation(name)
-        }
+        this.applyStateVisuals(name, 'idle')
       },
     })
 
@@ -849,7 +892,7 @@ export class ChatScene extends Scene {
 
   highlightAgent(agentName: string) {
     this.npcs.forEach((npc, name) => {
-      const body = npc.getAt(1) as Phaser.GameObjects.Sprite
+      const body = npc.getAt(0) as Phaser.GameObjects.Sprite
       if (name === agentName) {
         body.setAlpha(1)
         this.tweens.add({
@@ -867,7 +910,7 @@ export class ChatScene extends Scene {
 
   resetAgentHighlight() {
     this.npcs.forEach((npc) => {
-      const body = npc.getAt(1) as Phaser.GameObjects.Sprite
+      const body = npc.getAt(0) as Phaser.GameObjects.Sprite
       body.setAlpha(1)
     })
   }

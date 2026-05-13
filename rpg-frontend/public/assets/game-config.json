@@ -18,8 +18,9 @@
       ],
       "collisionLayer": "collisions",
       "characterScales": {
-        "worker1": 6,
-        "manager": 6
+        "girl": 6,
+        "manager": 6,
+        "mafia1": 8
       }
     },
     "office": {
@@ -43,14 +44,15 @@
       ],
       "collisionLayer": "collisions",
       "characterScales": {
-        "worker1": 3.2,
-        "manager": 3.2
+        "girl": 4,
+        "manager": 4,
+        "mafia1": 6
       }
     }
   },
   "characters": {
-    "worker1": {
-      "key": "worker1",
+    "girl": {
+      "key": "girl",
       "type": "spritesheet",
       "spritesheets": {
         "idle": {
@@ -98,6 +100,36 @@
         }
       },
       "scale": 1.8,
+      "shadow": {
+        "offsetY": 58,
+        "width": 44,
+        "height": 14
+      },
+      "nameLabelOffsetY": -70,
+      "footprint": {
+        "width": 30,
+        "height": 12,
+        "offsetY": -12
+      }
+    },
+    "mafia1": {
+      "key": "mafia1",
+      "type": "spritesheet",
+      "spritesheets": {
+        "idle": {
+          "path": "/assets/characters/mafia1_idle.png",
+          "frameWidth": 128,
+          "frameHeight": 128,
+          "frameRate": 6
+        },
+        "walk": {
+          "path": "/assets/characters/mafia1_walk.png",
+          "frameWidth": 128,
+          "frameHeight": 128,
+          "frameRate": 10
+        }
+      },
+      "scale": 1.35,
       "shadow": {
         "offsetY": 58,
         "width": 44,

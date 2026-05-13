@@ -27,7 +27,7 @@ const initialAgentFormData: AgentFormData = {
   name: '',
   role: '',
   personality: '',
-  avatar_type: 'worker1',
+  avatar_type: 'girl',
   provider_id: '',
   specialty: '',
   expertise: '',
@@ -135,7 +135,7 @@ export const AgentConfigPage = () => {
       name: agent.name,
       role: agent.role,
       personality: agent.personality,
-      avatar_type: agent.avatar_type || 'worker1',
+      avatar_type: agent.avatar_type || 'girl',
       provider_id: agent.provider_id,
       specialty: agent.specialty || '',
       expertise: agent.expertise || '',
@@ -571,7 +571,7 @@ export const AgentConfigPage = () => {
                             {key} ({char.type === 'spritesheet' ? '帧动画' : '代码生成'})
                           </option>
                         ))
-                      : <option value="worker1">worker1</option>}
+                      : <option value="girl">girl</option>}
                   </select>
                   <span className="hint">选择 Agent 在游戏场景中的外观形象</span>
                 </div>

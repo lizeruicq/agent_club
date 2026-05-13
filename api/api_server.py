@@ -328,7 +328,7 @@ async def list_agents(request: Request):
             name=manager_config.name,
             role=manager_config.role,
             personality=manager_config.personality,
-            avatar_type="manager"
+            avatar_type=manager_config.avatar_type
         ))
 
     # 添加 Worker Agents
