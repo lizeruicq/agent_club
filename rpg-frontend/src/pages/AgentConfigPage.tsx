@@ -38,10 +38,18 @@ const initialManagerFormData: ManagerFormData = {
   name: '任务管理器',
   role: '项目协调经理',
   personality: '专业、有条理、善于规划和协调，能够准确分析需求并合理分配任务',
-  avatar_type: 'manager',
+  avatar_type: 'boy',
   provider_id: '',
   is_active: false,
 }
+
+const avatarTypeAliases: Record<string, string> = {
+  manager: 'boy',
+  worker1: 'girl',
+}
+
+const normalizeAvatarType = (avatarType: string | undefined, fallback: string) =>
+  avatarType ? (avatarTypeAliases[avatarType] ?? avatarType) : fallback
 
 export const AgentConfigPage = () => {
   const [agents, setAgents] = useState<AgentConfig[]>([])
@@ -83,7 +91,7 @@ export const AgentConfigPage = () => {
           name: managerAgent.name,
           role: managerAgent.role,
           personality: managerAgent.personality,
-          avatar_type: managerAgent.avatar_type || 'manager',
+          avatar_type: normalizeAvatarType(managerAgent.avatar_type, 'boy'),
           provider_id: managerAgent.provider_id || '',
           is_active: managerAgent.is_active,
         })
@@ -135,7 +143,7 @@ export const AgentConfigPage = () => {
       name: agent.name,
       role: agent.role,
       personality: agent.personality,
-      avatar_type: agent.avatar_type || 'girl',
+      avatar_type: normalizeAvatarType(agent.avatar_type, 'girl'),
       provider_id: agent.provider_id,
       specialty: agent.specialty || '',
       expertise: agent.expertise || '',
@@ -150,7 +158,7 @@ export const AgentConfigPage = () => {
         name: manager.name,
         role: manager.role,
         personality: manager.personality,
-        avatar_type: manager.avatar_type || 'manager',
+        avatar_type: normalizeAvatarType(manager.avatar_type, 'boy'),
         provider_id: manager.provider_id || '',
         is_active: manager.is_active,
       })
@@ -866,7 +874,7 @@ export const AgentConfigPage = () => {
                             {key} ({char.type === 'spritesheet' ? '帧动画' : '代码生成'})
                           </option>
                         ))
-                      : <option value="manager">manager</option>}
+                      : <option value="boy">boy</option>}
                   </select>
                   <span className="hint">选择 Manager 在游戏场景中的外观形象</span>
                 </div>

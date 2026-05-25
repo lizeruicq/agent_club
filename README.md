@@ -16,11 +16,15 @@
 ## ✨ 核心特性
 
 ### 🎮 RPG 像素风界面
-- **2D 游戏场景**：基于 Phaser.js 的星露谷物语风格办公室场景
-- **Agent 形象**：Manager 与 Worker 均使用帧动画精灵图（四方向行走/待机动画）
+- **2D 游戏场景**：基于 Phaser.js 的星露谷物语风格，支持多场景切换（图书馆 / 办公室）
+- **Agent 形象**：Manager 与 Worker 均使用帧动画精灵图
+  - 四方向行走/待机动画（如 girl、manager）
+  - 单方向帧动画自动水平翻转兼容（如 mafia1）
+- **按场景角色缩放**：不同场景可独立配置 `characterScales`，角色自动适配 tile 比例
 - **动画状态**：待机 / 行走 / 思考 / 说话
 - **对话气泡**：游戏风格的对话展示
 - **点击移动**：选中角色后点击地图空地可移动，自动避障
+- **历史会话**：支持保存、切换、删除历史对话，每次切换自动恢复当时的 Agent / Manager / 场景配置
 
 ### 🧠 多 Agent 架构
 - **Manager-Worker 模式**：智能任务分派与结果整合
@@ -170,10 +174,20 @@ python main.py
 │   ├── agents_api.py      # Agent 配置接口
 │   ├── providers_api.py   # Provider 配置接口
 │   ├── html_preview_api.py # HTML 预览接口
-│   └── ...
+│   ├── conversations_api.py # 历史会话接口
+│   ├── game_config_api.py # 游戏场景配置接口
+│   ├── manager_api.py     # Manager 配置接口
+│   ├── skills_api.py      # 技能管理接口
+│   ├── tools_api.py       # 工具管理接口
+│   └── session_manager.py # 会话管理器
+├── auth/                  # 用户认证
+│   ├── dependencies.py    # Token 校验
+│   ├── user_data.py       # 用户目录与数据服务
+│   └── user_managers.py   # 用户级管理器工厂
 ├── config/                # 配置管理
-│   ├── agents_config.py   # Agent 配置
-│   ├── manager_config.py  # Manager 配置
+│   ├── agents_config.py       # Agent 配置
+│   ├── manager_config.py      # Manager 配置
+│   ├── conversations_manager.py # 历史会话管理器
 │   └── ...
 ├── providers/             # LLM 提供商管理
 │   ├── provider_manager.py
@@ -202,16 +216,25 @@ python main.py
 │   │   ├── pages/         # 页面组件
 │   │   │   ├── AgentConfigPage.tsx
 │   │   │   ├── ProviderConfigPage.tsx
+│   │   │   ├── SceneSelectPage.tsx  # 场景切换
 │   │   │   ├── HtmlPreviewPage.tsx
-│   │   │   ├── PlazaPage.tsx        # 作品广场（新增）
+│   │   │   ├── PlazaPage.tsx        # 作品广场
 │   │   │   └── ...
 │   │   └── api/           # API 客户端
 │   ├── public/
 │   │   └── assets/
 │   │       ├── characters/  # 角色帧动画精灵图
-│   │       └── maps/        # Tiled 地图资源
+│   │       ├── maps/        # Tiled 地图资源
+│   │       └── game-config.json # 公共场景/角色/动画配置
 │   └── package.json
-├── data/                  # 数据存储
+├── data/                  # 用户数据存储
+│   └── users/
+│       └── {user_id}/
+│           ├── agents_config.json   # 用户 Agent 配置
+│           ├── manager_config.json  # 用户 Manager 配置
+│           ├── game_config.json     # 用户场景配置（currentScene、description）
+│           ├── conversations/       # 历史会话快照
+│           └── ...
 ├── output/                # Agent 产出文件
 │   ├── doc/               # 文档类产出
 │   └── preview/           # HTML 预览文件
@@ -265,6 +288,12 @@ python main.py
 | `/api/manager` | GET/PUT | Manager 配置 |
 | `/api/game-config` | GET/PUT | 游戏场景配置 |
 | `/api/html-preview` | GET/POST/DELETE | HTML 预览文件管理 |
+| `/api/conversations` | GET | 列出历史会话列表 |
+| `/api/conversations/{id}` | GET | 获取历史会话详情 |
+| `/api/conversations` | POST | 保存当前会话为历史会话 |
+| `/api/conversations/{id}` | PUT | 更新已有历史会话 |
+| `/api/conversations/{id}` | DELETE | 删除历史会话 |
+| `/api/conversations/{id}/restore` | POST | 恢复历史会话（视图快照） |
 | `/api/system/reinitialize` | POST | 重新初始化系统 |
 | `/api/health` | GET | 健康检查 |
 
@@ -321,13 +350,16 @@ docker-compose up -d
 ## 🗺️ 开发路线
 
 - [x] RPG 像素风 2D 游戏场景
+- [x] 多场景切换（图书馆 / 办公室）
+- [x] 四方向 + 单方向帧动画兼容
 - [x] Manager-Worker 多 Agent 协作
 - [x] 多 LLM Provider 支持
 - [x] 流式响应输出
 - [x] 技能系统
 - [x] 工具系统
 - [x] HTML 预览与作品发布平台
-- [ ] 用户认证系统
+- [x] 用户认证系统
+- [x] 历史会话保存与恢复
 - [ ] 作品点赞与评论
 - [ ] 对象存储 & CDN 加速
 - [ ] 更多游戏场景

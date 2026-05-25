@@ -19,8 +19,10 @@
       "collisionLayer": "collisions",
       "characterScales": {
         "girl": 6,
-        "manager": 6,
-        "mafia1": 8
+        "boy": 6,
+        "mafia1": 8,
+        "mafia2": 8,
+        "mafia3": 8
       }
     },
     "office": {
@@ -45,8 +47,10 @@
       "collisionLayer": "collisions",
       "characterScales": {
         "girl": 4,
-        "manager": 4,
-        "mafia1": 6
+        "boy": 4,
+        "mafia1": 6,
+        "mafia2": 6,
+        "mafia3": 6
       }
     }
   },
@@ -56,13 +60,13 @@
       "type": "spritesheet",
       "spritesheets": {
         "idle": {
-          "path": "/assets/characters/worker1_idle.png",
+          "path": "/assets/characters/girl_idle.png",
           "frameWidth": 64,
           "frameHeight": 128,
           "frameRate": 6
         },
         "walk": {
-          "path": "/assets/characters/worker1_walking.png",
+          "path": "/assets/characters/girl_walk.png",
           "frameWidth": 64,
           "frameHeight": 128,
           "frameRate": 10
@@ -81,19 +85,19 @@
         "offsetY": -12
       }
     },
-    "manager": {
-      "key": "manager",
+    "boy": {
+      "key": "boy",
       "type": "spritesheet",
       "fallbackKey": "manager_capitalist",
       "spritesheets": {
         "idle": {
-          "path": "/assets/characters/manager_idle.png",
+          "path": "/assets/characters/boy_idle.png",
           "frameWidth": 48,
           "frameHeight": 96,
           "frameRate": 6
         },
         "walk": {
-          "path": "/assets/characters/manager_walking.png",
+          "path": "/assets/characters/boy_walk.png",
           "frameWidth": 48,
           "frameHeight": 96,
           "frameRate": 10
@@ -124,6 +128,66 @@
         },
         "walk": {
           "path": "/assets/characters/mafia1_walk.png",
+          "frameWidth": 128,
+          "frameHeight": 128,
+          "frameRate": 10
+        }
+      },
+      "scale": 1.35,
+      "shadow": {
+        "offsetY": 58,
+        "width": 44,
+        "height": 14
+      },
+      "nameLabelOffsetY": -70,
+      "footprint": {
+        "width": 30,
+        "height": 12,
+        "offsetY": -12
+      }
+    },
+    "mafia2": {
+      "key": "mafia2",
+      "type": "spritesheet",
+      "spritesheets": {
+        "idle": {
+          "path": "/assets/characters/mafia2_idle.png",
+          "frameWidth": 128,
+          "frameHeight": 128,
+          "frameRate": 6
+        },
+        "walk": {
+          "path": "/assets/characters/mafia2_walk.png",
+          "frameWidth": 128,
+          "frameHeight": 128,
+          "frameRate": 10
+        }
+      },
+      "scale": 1.35,
+      "shadow": {
+        "offsetY": 58,
+        "width": 44,
+        "height": 14
+      },
+      "nameLabelOffsetY": -70,
+      "footprint": {
+        "width": 30,
+        "height": 12,
+        "offsetY": -12
+      }
+    },
+    "mafia3": {
+      "key": "mafia3",
+      "type": "spritesheet",
+      "spritesheets": {
+        "idle": {
+          "path": "/assets/characters/mafia3_idle.png",
+          "frameWidth": 128,
+          "frameHeight": 128,
+          "frameRate": 6
+        },
+        "walk": {
+          "path": "/assets/characters/mafia3_walk.png",
           "frameWidth": 128,
           "frameHeight": 128,
           "frameRate": 10

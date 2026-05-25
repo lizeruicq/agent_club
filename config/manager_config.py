@@ -22,7 +22,7 @@ class ManagerConfig(BaseModel):
         default="专业、有条理、善于规划和协调，能够准确分析需求并合理分配任务",
         description="Manager 性格描述"
     )
-    avatar_type: str = Field(default="manager", description="头像类型")
+    avatar_type: str = Field(default="boy", description="头像类型")
     provider_id: str = Field(default="", description="关联的 Provider ID")
     is_active: bool = Field(default=False, description="是否启用 Manager 模式")
 

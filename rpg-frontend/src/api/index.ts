@@ -18,7 +18,6 @@ import type {
   Skill,
   HtmlFileInfo,
   ConversationMeta,
-  ConversationDetail,
 } from '../types'
 import type { GameConfig } from '../game/config'
 

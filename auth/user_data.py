@@ -87,7 +87,7 @@ class UserDataService:
                     "name": "任务管理器",
                     "role": "项目协调经理",
                     "personality": "专业、有条理、善于规划和协调",
-                    "avatar_type": "manager",
+                    "avatar_type": "mafia2",
                     "provider_id": "",
                     "is_active": False,
                 }, f, ensure_ascii=False, indent=2)

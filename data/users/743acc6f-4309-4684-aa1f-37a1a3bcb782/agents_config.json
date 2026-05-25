@@ -2,19 +2,17 @@
   "agents": [
     {
       "id": "agent_f79d32ee",
-      "name": "啊粉",
-      "role": "模特",
-      "personality": "活泼火辣",
-      "avatar_type": "girl",
+      "name": "007",
+      "role": "职业杀手",
+      "personality": "话唠",
+      "avatar_type": "mafia3",
       "agent_type": "worker",
-      "specialty": "表演、哄人",
+      "specialty": "使用高科技武器消灭敌人",
       "expertise": "",
       "provider_id": "provider",
-      "skill_ids": [
-        "writing_assistant"
-      ],
+      "skill_ids": [],
       "created_at": "2026-05-11T00:07:49.678606",
-      "updated_at": "2026-05-12T22:00:45.987343",
+      "updated_at": "2026-05-25T23:57:52.889230",
       "is_active": true
     },
     {

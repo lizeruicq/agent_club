@@ -2,7 +2,7 @@
   "name": "领导",
   "role": "团队领导",
   "personality": "专业、有条理、善于规划和协调，能够准确分析需求并合理分配任务",
-  "avatar_type": "manager",
+  "avatar_type": "boy",
   "provider_id": "provider-1",
   "is_active": false
 }

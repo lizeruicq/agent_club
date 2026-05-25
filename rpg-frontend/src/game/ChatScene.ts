@@ -13,6 +13,10 @@ const MANAGER_FALLBACK_CONFIG = {
 }
 
 const DIRS = ['down', 'left', 'right', 'up'] as const
+const AVATAR_TYPE_ALIASES: Record<string, string> = {
+  manager: 'boy',
+  worker1: 'girl'
+}
 
 export class ChatScene extends Scene {
   private npcs: Map<string, Phaser.GameObjects.Container> = new Map()
@@ -383,15 +387,19 @@ export class ChatScene extends Scene {
       const screenX = offsetX + mapX * this.sceneScale
       const screenY = offsetY + mapY * this.sceneScale
 
+      const charKey = this.resolveAvatarType(agent.avatar_type)
       const texture = this.resolveAgentTexture(agent)
-      const charKey = agent.avatar_type
 
       this.createSingleNPC(agent.name, screenX, screenY, texture, index, mapX, mapY, charKey)
     })
   }
 
+  private resolveAvatarType(avatarType: string): string {
+    return AVATAR_TYPE_ALIASES[avatarType] ?? avatarType
+  }
+
   private resolveAgentTexture(agent: AgentInfo): string {
-    const charConfig = this.config.characters[agent.avatar_type]
+    const charConfig = this.config.characters[this.resolveAvatarType(agent.avatar_type)]
     if (!charConfig) {
       return this.getAgentTextureByName(agent.name)
     }
