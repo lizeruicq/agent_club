@@ -15,7 +15,7 @@ from typing import Optional
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
-from .file_io import WORKING_DIR, _resolve_file_path
+from .file_io import _resolve_file_path, get_working_dir
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -140,7 +140,7 @@ def _resolve_search_root(
     search_root = (
         Path(_resolve_file_path(path))
         if path
-        else WORKING_DIR
+        else get_working_dir()
     )
     try:
         exists = search_root.exists()

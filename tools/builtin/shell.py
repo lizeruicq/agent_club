@@ -16,7 +16,7 @@ from typing import Optional
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
-from .file_io import WORKING_DIR
+from .file_io import get_working_dir
 
 
 def _kill_process_tree_win32(pid: int) -> None:
@@ -317,11 +317,11 @@ async def execute_shell_command(
         except (ValueError, TypeError):
             timeout = 60.0
 
-    # Use WORKING_DIR as default working directory
+    # Use the current user workspace as default working directory when present.
     if cwd is not None:
         working_dir = cwd
     else:
-        working_dir = WORKING_DIR
+        working_dir = get_working_dir()
 
     # Ensure the venv Python is on PATH for subprocesses
     env = os.environ.copy()

@@ -10,6 +10,8 @@ from agentscope.message import Msg
 from agentscope.model import DashScopeChatModel, OpenAIChatModel, AnthropicChatModel
 from agentscope.formatter import OpenAIChatFormatter
 from agentscope.memory import InMemoryMemory
+from agentscope.tool import Toolkit
+from pydantic import BaseModel, Field
 
 from tools import get_toolkit
 
@@ -33,6 +35,24 @@ class TaskPlan:
         }
 
 
+class TaskPlanStepModel(BaseModel):
+    """Manager 规划输出中的单个步骤。"""
+    step_id: int = Field(..., ge=1)
+    worker_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    task: str = Field(..., min_length=1)
+    input: str = ""
+    output: str = Field(..., min_length=1)
+    depends_on: List[int] = Field(default_factory=list)
+
+
+class TaskPlanDecisionModel(BaseModel):
+    """Manager 规划输出 schema。"""
+    need_dispatch: bool
+    reason: str = ""
+    steps: List[TaskPlanStepModel] = Field(default_factory=list)
+
+
 class ManagerAgent(AgentBase):
     """
     管理者智能体 - 任务协调中心
@@ -53,6 +73,7 @@ class ManagerAgent(AgentBase):
         api_key: Optional[str] = None,
         llm_config: Optional[Dict[str, Any]] = None,
         skill_names: Optional[List[str]] = None,
+        toolkit: Optional[Toolkit] = None,
         event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ):
         super().__init__()
@@ -60,6 +81,7 @@ class ManagerAgent(AgentBase):
         self.role = role
         self.personality = personality
         self.skill_names = skill_names or []
+        self.toolkit = toolkit or get_toolkit()
         self._event_callback = event_callback
 
         # 初始化模型
@@ -80,6 +102,7 @@ class ManagerAgent(AgentBase):
 
         # Worker注册表
         self._workers: Dict[str, 'WorkerAgent'] = {}
+        self._workers_by_name: Dict[str, 'WorkerAgent'] = {}
 
         # 共享记忆（所有Worker共用，确保彼此可见对话历史）
         self.shared_memory = InMemoryMemory()
@@ -144,7 +167,8 @@ class ManagerAgent(AgentBase):
 
     def register_worker(self, worker: 'WorkerAgent'):
         """注册Worker Agent"""
-        self._workers[worker.name] = worker
+        self._workers[worker.worker_id] = worker
+        self._workers_by_name[worker.name] = worker
         worker.set_manager(self)  # 告诉Worker谁是Manager
         # 将共享记忆注入Worker，使所有Worker可见同一份对话历史
         worker.set_shared_memory(self.shared_memory)
@@ -153,9 +177,9 @@ class ManagerAgent(AgentBase):
     def get_worker_capabilities(self) -> str:
         """获取所有Worker的能力描述"""
         capabilities = []
-        for name, worker in self._workers.items():
+        for worker_id, worker in self._workers.items():
             capabilities.append(
-                f"- {name}: {worker.specialty}\n  专长: {worker.expertise}"
+                f"- worker_id: {worker_id}\n  name: {worker.name}\n  specialty: {worker.specialty}\n  expertise: {worker.expertise}"
             )
         return "\n".join(capabilities)
 
@@ -255,8 +279,8 @@ class ManagerAgent(AgentBase):
 2. 如果需要多个步骤或不同专长，制定分派计划
 
 文件协作约定（必须遵守）：
-- 产品/设计类文档（PRD、需求说明等）必须保存到 output/doc/ 目录，output 字段示例: "output/doc/prd.md"
-- 前端代码必须生成纯 HTML 文件（所有 CSS 和 JavaScript 都内联写在同一个 HTML 文件里，不单独生成 .css 或 .js 文件），保存到 output/preview/ 目录，output 字段示例: "output/preview/index.html" 或 "output/preview/game/index.html"
+- 产品/设计类文档（PRD、需求说明等）必须保存到 output/doc/ 目录。该路径会自动映射到当前用户的文档工作区。
+- 前端代码必须生成纯 HTML 文件（所有 CSS 和 JavaScript 都内联写在同一个 HTML 文件里，不单独生成 .css 或 .js 文件），保存到 output/preview/ 目录。该路径会自动映射到当前用户的预览工作区。
 - 如涉及文件依赖，请在 input 中明确文件路径
 - 每个步骤都必须包含 output 字段，指定产出的文件路径
 
@@ -267,7 +291,8 @@ class ManagerAgent(AgentBase):
     "steps": [
         {{
             "step_id": 1,
-            "agent_name": "负责该步骤的Agent名称",
+            "worker_id": "必须从上方团队成员列表中选择 worker_id",
+            "agent_name": "负责该步骤的Agent名称，仅用于展示",
             "task": "具体任务描述",
             "input": "需要传递给Agent的输入",
             "output": "产出的文件路径（如 output/doc/prd.md 或 output/preview/index.html）",
@@ -287,17 +312,13 @@ class ManagerAgent(AgentBase):
             content = self._extract_text_from_response(response.content)
             print(f"\n🤔 [Manager] AI规划思考:\n{content[:500]}...")
 
-            # 提取JSON
-            json_str = self._extract_json(content)
-            plan_data = json.loads(json_str)
-
-            need_dispatch = plan_data.get("need_dispatch", False)
-            reason = plan_data.get("reason", "")
+            decision = self._parse_task_plan_decision(content)
+            reason = decision.reason
             print(f"\n📊 [Manager] 决策分析:")
-            print(f"   需要分派: {need_dispatch}")
+            print(f"   需要分派: {decision.need_dispatch}")
             print(f"   原因: {reason[:100]}...")
 
-            if not need_dispatch:
+            if not decision.need_dispatch:
                 print(f"   结论: 任务简单，Manager直接处理")
                 return TaskPlan(
                     task_id=f"task_{len(self._task_history)}",
@@ -305,8 +326,16 @@ class ManagerAgent(AgentBase):
                     steps=[]
                 )
 
-            steps = plan_data.get("steps", [])
+            steps = self._normalize_task_steps(decision.steps)
             print(f"   结论: 需要分派给{len(steps)}个Worker执行")
+
+            if not steps:
+                print("   结论: 没有有效步骤，Manager直接处理")
+                return TaskPlan(
+                    task_id=f"task_{len(self._task_history)}",
+                    description=user_request,
+                    steps=[]
+                )
 
             # 创建任务计划
             task_plan = TaskPlan(
@@ -325,6 +354,40 @@ class ManagerAgent(AgentBase):
                 description=user_request,
                 steps=[]
             )
+
+    def _parse_task_plan_decision(self, content: str) -> TaskPlanDecisionModel:
+        """解析并校验 Manager 规划输出。"""
+        json_str = self._extract_json(content)
+        plan_data = json.loads(json_str)
+        return TaskPlanDecisionModel.model_validate(plan_data)
+
+    def _normalize_task_steps(self, steps: List[TaskPlanStepModel]) -> List[Dict[str, Any]]:
+        """把 LLM 输出步骤规范化为内部执行协议。"""
+        normalized: List[Dict[str, Any]] = []
+        seen_ids = set()
+        for index, step in enumerate(steps, start=1):
+            worker_id = step.worker_id
+            worker = self._workers.get(worker_id or "") if worker_id else None
+            if not worker and step.agent_name:
+                worker = self._workers_by_name.get(step.agent_name)
+                worker_id = worker.worker_id if worker else None
+            if not worker or not worker_id:
+                print(f"⚠️ [Manager] 跳过无效步骤 {step.step_id}: worker 不存在 ({step.worker_id or step.agent_name})")
+                continue
+
+            step_id = step.step_id if step.step_id not in seen_ids else index
+            seen_ids.add(step_id)
+            depends_on = [dep for dep in step.depends_on if dep in seen_ids or dep < step_id]
+            normalized.append({
+                "step_id": step_id,
+                "worker_id": worker_id,
+                "agent_name": worker.name,
+                "task": step.task.strip(),
+                "input": step.input.strip(),
+                "output": step.output.strip(),
+                "depends_on": depends_on,
+            })
+        return normalized
 
     async def _execute_plan(self, task_plan: TaskPlan):
         """执行任务计划"""
@@ -388,7 +451,7 @@ class ManagerAgent(AgentBase):
         paths += re.findall(r'(?:保存到|写入|路径[:：]?\s*)[`"\']?(output/[\w\-/.]+)[`"\']?', text)
         return sorted(set(paths))
 
-    def _build_context_from_results(self, task_plan: TaskPlan, depends_on: List[str]) -> str:
+    def _build_context_from_results(self, task_plan: TaskPlan, depends_on: List[int]) -> str:
         """从上游步骤结果中构建精简上下文（简短摘要 + 明确的文件引用）。"""
         context_parts = []
         file_refs = []
@@ -421,6 +484,7 @@ class ManagerAgent(AgentBase):
 
     async def _execute_step(self, step: Dict, task_plan: TaskPlan):
         """执行单个步骤"""
+        worker_id = step.get("worker_id")
         agent_name = step.get("agent_name")
         task_description = step.get("task")
         task_input = step.get("input", "")
@@ -428,14 +492,15 @@ class ManagerAgent(AgentBase):
         print(f"\n   📤 [Manager] 分派任务给 {agent_name}:")
         print(f"      任务: {task_description[:50]}...")
 
-        worker = self._workers.get(agent_name)
+        worker = self._workers.get(worker_id) or self._workers_by_name.get(agent_name)
         if not worker:
-            print(f"      ❌ Worker {agent_name} 未找到")
+            print(f"      ❌ Worker {worker_id or agent_name} 未找到")
             task_plan.results[step["step_id"]] = {
                 "status": "failed",
-                "error": f"Worker {agent_name} 未找到"
+                "error": f"Worker {worker_id or agent_name} 未找到"
             }
             return
+        agent_name = worker.name
 
         # 发射 Worker 开始事件
         self._emit("worker_start",
@@ -452,11 +517,11 @@ class ManagerAgent(AgentBase):
         # 构建文件协作约定提示
         file_notes = []
         if any(kw in agent_name for kw in ["产品", "设计", "需求"]):
-            file_notes.append("【文档保存】如产出PRD、设计文档、需求说明等，请保存到 output/doc/ 目录，方便下游同事读取。")
+            file_notes.append("【文档保存】如产出PRD、设计文档、需求说明等，请保存到 output/doc/ 目录；系统会自动写入当前用户的文档工作区。")
         if any(kw in agent_name for kw in ["前端", "后端", "开发", "程序"]):
             if step.get("depends_on"):
                 file_notes.append("【文档读取】上游步骤的文档可能保存在 output/doc/ 目录，请先搜索并读取相关文件后再开始开发。")
-            file_notes.append("【代码保存】代码文件请保存到 output/preview/ 目录下。")
+            file_notes.append("【代码保存】代码文件请保存到 output/preview/ 目录下；系统会自动写入当前用户的 HTML 预览工作区。")
             file_notes.append("【禁止预览】完成开发后，只需将 HTML 文件保存到指定目录即可，不需要打开浏览器预览、截图或发送文件给用户。")
         file_instruction = "\n".join(file_notes)
 
@@ -672,12 +737,15 @@ class WorkerAgent:
         personality: str,
         specialty: str,  # 专业领域
         expertise: str,  # 具体专长描述
+        worker_id: Optional[str] = None,
         model_name: str = "qwen-max",
         api_key: Optional[str] = None,
         llm_config: Optional[Dict[str, Any]] = None,
         tools: Optional[List[str]] = None,  # 该Worker可用的工具
         skill_names: Optional[List[str]] = None,
+        toolkit: Optional[Toolkit] = None,
     ):
+        self.worker_id = worker_id or name
         self.name = name
         self.role = role
         self.personality = personality
@@ -703,6 +771,7 @@ class WorkerAgent:
             personality=personality,
             llm_config=worker_llm_config,
             skill_names=skill_names,
+            toolkit=toolkit,
         )
 
     def set_manager(self, manager: ManagerAgent):

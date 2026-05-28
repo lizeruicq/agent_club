@@ -27,9 +27,11 @@ class UserDataService:
         self._data_dir = os.path.join(USER_DATA_ROOT, user_id)
         self._output_dir = os.path.join(USER_OUTPUT_ROOT, user_id)
         self._preview_dir = os.path.join(self._output_dir, "preview")
+        self._doc_dir = os.path.join(self._output_dir, "doc")
         # 确保目录存在
         os.makedirs(self._data_dir, exist_ok=True)
         os.makedirs(self._preview_dir, exist_ok=True)
+        os.makedirs(self._doc_dir, exist_ok=True)
 
     @property
     def data_dir(self) -> str:
@@ -47,6 +49,11 @@ class UserDataService:
         return self._preview_dir
 
     @property
+    def doc_dir(self) -> str:
+        """用户文档产出目录"""
+        return self._doc_dir
+
+    @property
     def agents_config_file(self) -> str:
         return os.path.join(self._data_dir, "agents_config.json")
 
@@ -61,6 +68,10 @@ class UserDataService:
     @property
     def skills_config_file(self) -> str:
         return os.path.join(self._data_dir, "skills_config.json")
+
+    @property
+    def tools_config_file(self) -> str:
+        return os.path.join(self._data_dir, "tools_config.json")
 
     @property
     def game_config_file(self) -> str:
@@ -96,6 +107,11 @@ class UserDataService:
         if not os.path.exists(self.providers_config_file):
             with open(self.providers_config_file, 'w', encoding='utf-8') as f:
                 json.dump({"providers": [], "version": "1.0"}, f, ensure_ascii=False, indent=2)
+
+        # 创建用户级工具配置
+        if not os.path.exists(self.tools_config_file):
+            with open(self.tools_config_file, 'w', encoding='utf-8') as f:
+                json.dump({"tools": {}}, f, ensure_ascii=False, indent=2)
 
         # 创建默认游戏配置（从公共模板复制场景列表）
         if not os.path.exists(self.game_config_file):

@@ -28,7 +28,7 @@ from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
 import os
-from .file_io import WORKING_DIR
+from .file_io import get_working_dir
 
 # Simplified config stubs (replacing qwenpaw-specific modules)
 def get_playwright_chromium_executable_path():
@@ -44,8 +44,8 @@ def is_running_in_container():
     return os.path.exists("/.dockerenv") or os.environ.get("container") == "podman"
 
 def get_current_workspace_dir():
-    """Return WORKING_DIR as the workspace directory."""
-    return WORKING_DIR
+    """Return the current user workspace directory."""
+    return get_working_dir()
 
 class EnvVarLoader:
     """Simple env var loader."""
@@ -101,7 +101,7 @@ def _resolve_output_path(path: str) -> str:
     """Resolve relative output paths under workspace_dir/browser/."""
     if Path(path).is_absolute():
         return path
-    base_dir = (get_current_workspace_dir() or WORKING_DIR) / "browser"
+    base_dir = get_current_workspace_dir() / "browser"
     base_dir.mkdir(parents=True, exist_ok=True)
     return str(base_dir / path)
 

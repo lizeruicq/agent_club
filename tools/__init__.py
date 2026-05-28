@@ -2,11 +2,13 @@
 工具管理模块 - 统一管理所有Agent工具
 所有工具在此注册，所有Agent共享同一个Toolkit实例
 """
-from typing import Dict, List, Optional, Callable, Any, Literal
+from functools import wraps
+from typing import Dict, List, Optional, Callable, Any
 import logging
 import os
 import json
 from agentscope.tool import Toolkit
+from .builtin.file_io import FileWorkspace, workspace_context
 
 logger = logging.getLogger(__name__)
 
@@ -21,29 +23,34 @@ class ToolRegistry:
     """
 
     _instance = None
-    _toolkit: Optional[Toolkit] = None
-    _tools_config: Dict[str, bool] = {}  # 工具启用状态配置
-    _tools_meta: Dict[str, Any] = {}  # 工具元数据
-
-    def __new__(cls):
+    def __new__(cls, config_file: Optional[str] = None, workspace: Optional[FileWorkspace] = None):
+        # 用户级 ToolRegistry 需要独立实例，避免工具状态和 workspace 串用户。
+        if config_file is not None or workspace is not None:
+            instance = super().__new__(cls)
+            instance._initialized = False
+            return instance
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, config_file: Optional[str] = None, workspace: Optional[FileWorkspace] = None):
         if self._initialized:
             return
         self._initialized = True
+        self._config_file = config_file or TOOLS_CONFIG_FILE
+        self._workspace = workspace
         self._toolkit = Toolkit()
+        self._tools_config: Dict[str, bool] = {}
+        self._tools_meta: Dict[str, Any] = {}
         self._load_config()  # 先加载配置
         self._load_builtin_tools()
 
     def _load_config(self):
         """从配置文件加载工具配置"""
         try:
-            if os.path.exists(TOOLS_CONFIG_FILE):
-                with open(TOOLS_CONFIG_FILE, 'r', encoding='utf-8') as f:
+            if os.path.exists(self._config_file):
+                with open(self._config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                     self._tools_config = config.get('tools', {})
                     logger.info(f"✅ 从配置文件加载了 {len(self._tools_config)} 个工具配置")
@@ -58,16 +65,16 @@ class ToolRegistry:
         """保存工具配置到文件"""
         try:
             # 确保配置目录存在
-            os.makedirs(CONFIG_DIR, exist_ok=True)
+            os.makedirs(os.path.dirname(self._config_file), exist_ok=True)
 
             config = {
                 'tools': self._tools_config
             }
 
-            with open(TOOLS_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            with open(self._config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
 
-            logger.info(f"✅ 工具配置已保存到 {TOOLS_CONFIG_FILE}")
+            logger.info(f"✅ 工具配置已保存到 {self._config_file}")
             return True
         except Exception as e:
             logger.error(f"❌ 保存工具配置失败: {e}")
@@ -118,6 +125,18 @@ class ToolRegistry:
 
         logger.info(f"✅ 已注册 {len(self._toolkit.tools)} 个工具")
 
+    def _bind_workspace(self, tool_func: Callable) -> Callable:
+        """给工具调用绑定当前用户 workspace。"""
+        if self._workspace is None:
+            return tool_func
+
+        @wraps(tool_func)
+        async def wrapped(*args, **kwargs):
+            with workspace_context(self._workspace):
+                return await tool_func(*args, **kwargs)
+
+        return wrapped
+
     def register_tool(
         self,
         name: str,
@@ -144,7 +163,7 @@ class ToolRegistry:
 
         try:
             self._toolkit.register_tool_function(
-                tool_func,
+                self._bind_workspace(tool_func),
                 namesake_strategy=namesake_strategy
             )
             self._tools_config[name] = True
@@ -220,7 +239,7 @@ class ToolRegistry:
         if name in tool_map:
             try:
                 self._toolkit.register_tool_function(
-                    tool_map[name],
+                    self._bind_workspace(tool_map[name]),
                     namesake_strategy="override"
                 )
                 logger.debug(f"✅ 重新注册工具: {name}")

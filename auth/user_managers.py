@@ -8,10 +8,13 @@ from .user_data import get_user_data
 from config.agents_config import AgentsConfigManager
 from config.manager_config import ManagerConfigManager
 from providers.provider_manager import ProviderManager
+from tools import ToolRegistry
+from tools.builtin.file_io import build_workspace
 
 
 # 缓存：user_id -> (AgentsConfigManager, ManagerConfigManager, ProviderManager)
 _user_managers_cache: Dict[str, Tuple[AgentsConfigManager, ManagerConfigManager, ProviderManager]] = {}
+_user_tool_registry_cache: Dict[str, ToolRegistry] = {}
 
 
 def get_user_managers(user_id: str) -> Tuple[AgentsConfigManager, ManagerConfigManager, ProviderManager]:
@@ -38,3 +41,25 @@ def get_user_manager_config(user_id: str) -> ManagerConfigManager:
 def get_user_provider_manager(user_id: str) -> ProviderManager:
     """获取用户专属的 ProviderManager"""
     return get_user_managers(user_id)[2]
+
+
+def get_user_tool_registry(user_id: str) -> ToolRegistry:
+    """获取用户专属的 ToolRegistry"""
+    if user_id not in _user_tool_registry_cache:
+        user_data = get_user_data(user_id)
+        workspace = build_workspace(
+            root_dir=user_data.output_dir,
+            preview_dir=user_data.preview_dir,
+            doc_dir=user_data.doc_dir,
+        )
+        _user_tool_registry_cache[user_id] = ToolRegistry(
+            config_file=user_data.tools_config_file,
+            workspace=workspace,
+        )
+    return _user_tool_registry_cache[user_id]
+
+
+def clear_user_runtime_caches(user_id: str):
+    """清除用户运行时配置缓存，下一次访问会重新加载。"""
+    _user_managers_cache.pop(user_id, None)
+    _user_tool_registry_cache.pop(user_id, None)

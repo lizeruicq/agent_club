@@ -10,7 +10,7 @@ import time
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
-from .file_io import WORKING_DIR
+from .file_io import _resolve_file_path
 
 
 def _tool_error(msg: str) -> ToolResponse:
@@ -127,9 +127,13 @@ async def desktop_screenshot(
     """
     path = (path or "").strip()
     if not path:
-        path = str(WORKING_DIR / f"desktop_screenshot_{int(time.time())}.png")
+        path = f"desktop_screenshot_{int(time.time())}.png"
     if not path.lower().endswith(".png"):
         path = path.rstrip("/\\") + ".png"
+    try:
+        path = _resolve_file_path(path)
+    except Exception as e:
+        return _tool_error(f"invalid screenshot path: {e}")
 
     system = platform.system()
 

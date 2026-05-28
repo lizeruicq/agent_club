@@ -5,7 +5,7 @@ from typing import List, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from tools import tool_registry
+from auth.user_managers import get_user_tool_registry
 from auth.dependencies import get_current_user
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
@@ -52,6 +52,7 @@ TOOL_DESCRIPTIONS = {
 @router.get("", response_model=ToolListResponse)
 async def list_tools(user: dict = Depends(get_current_user)):
     """获取所有工具列表及其状态"""
+    tool_registry = get_user_tool_registry(user["id"])
     tools = tool_registry.list_tools()
     result = []
 
@@ -70,6 +71,7 @@ async def list_tools(user: dict = Depends(get_current_user)):
 @router.put("/{tool_name}", response_model=ToolUpdateResponse)
 async def update_tool(tool_name: str, request: UpdateToolRequest, user: dict = Depends(get_current_user)):
     """更新单个工具状态"""
+    tool_registry = get_user_tool_registry(user["id"])
     available_tools = tool_registry.list_tools()
 
     if tool_name not in available_tools:
@@ -92,6 +94,7 @@ async def update_tool(tool_name: str, request: UpdateToolRequest, user: dict = D
 @router.put("", response_model=ToolUpdateResponse)
 async def update_tools_batch(request: UpdateToolsRequest, user: dict = Depends(get_current_user)):
     """批量更新工具状态"""
+    tool_registry = get_user_tool_registry(user["id"])
     available_tools = set(tool_registry.list_tools())
 
     success_count = 0
@@ -124,6 +127,7 @@ async def update_tools_batch(request: UpdateToolsRequest, user: dict = Depends(g
 @router.get("/{tool_name}/config")
 async def get_tool_config(tool_name: str, user: dict = Depends(get_current_user)):
     """获取工具配置详情"""
+    tool_registry = get_user_tool_registry(user["id"])
     available_tools = tool_registry.list_tools()
 
     if tool_name not in available_tools:

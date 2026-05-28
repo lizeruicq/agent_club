@@ -9,6 +9,7 @@ from agentscope.memory import InMemoryMemory
 from agentscope.model import DashScopeChatModel, OpenAIChatModel, AnthropicChatModel
 from agentscope.agent import ReActAgent
 from agentscope.formatter import OpenAIChatFormatter
+from agentscope.tool import Toolkit
 
 from tools import get_toolkit
 
@@ -111,6 +112,7 @@ class ChatAgent(AgentBase):
         api_key: Optional[str] = None,
         llm_config: Optional[Dict[str, Any]] = None,
         skill_names: Optional[List[str]] = None,
+        toolkit: Optional[Toolkit] = None,
     ):
         """
         初始化聊天智能体
@@ -150,8 +152,8 @@ class ChatAgent(AgentBase):
         self.model = self._create_model()
         formatter = self._create_formatter()
 
-        # 获取全局 Toolkit（所有 Agent 共享）
-        toolkit = get_toolkit()
+        # 用户级 Toolkit 优先；未传入时回退到全局 Toolkit，保持兼容。
+        toolkit = toolkit or get_toolkit()
 
         # 创建 ReAct 智能体，使用角色化的 system prompt
         sys_prompt = self._create_system_prompt()

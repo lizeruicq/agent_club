@@ -95,7 +95,7 @@ class SessionManager:
         初始化用户的 Agent 运行时会话。
         从用户专属的配置文件加载 providers、agents、manager，创建 Agent 实例。
         """
-        from auth.user_managers import get_user_managers
+        from auth.user_managers import get_user_managers, get_user_tool_registry
 
         session = self.get_session(user_id)
 
@@ -112,6 +112,8 @@ class SessionManager:
 
             # 获取用户专属配置管理器
             agents_mgr, manager_mgr, provider_mgr = get_user_managers(user_id)
+            tool_registry = get_user_tool_registry(user_id)
+            toolkit = tool_registry.get_toolkit()
 
             # 获取配置
             manager_config = manager_mgr.get_config()
@@ -122,10 +124,10 @@ class SessionManager:
             # 根据 Manager 配置决定模式
             if manager_config.is_active and manager_config.provider_id:
                 session.use_manager_mode = True
-                await self._init_manager_worker(session, manager_config, worker_configs, provider_mgr)
+                await self._init_manager_worker(session, manager_config, worker_configs, provider_mgr, toolkit)
             else:
                 session.use_manager_mode = False
-                await self._init_msghub(session, worker_configs, provider_mgr)
+                await self._init_msghub(session, worker_configs, provider_mgr, toolkit)
 
             session.initialized = True
             print(f"✅ [Session] user={user_id} 初始化完成: mode={'manager' if session.use_manager_mode else 'msghub'}, agents={len(session.agents)}")
@@ -133,11 +135,10 @@ class SessionManager:
 
     async def reinitialize_user_session(self, user_id: str) -> UserSession:
         """重新初始化用户会话（用户修改配置后调用）"""
-        from auth.user_managers import get_user_managers, _user_managers_cache
+        from auth.user_managers import clear_user_runtime_caches
 
         # 清除配置缓存，确保重新加载文件
-        if user_id in _user_managers_cache:
-            del _user_managers_cache[user_id]
+        clear_user_runtime_caches(user_id)
 
         # 移除旧 session
         self.remove_session(user_id)
@@ -151,6 +152,7 @@ class SessionManager:
         manager_config: ManagerConfig,
         worker_configs: List[AgentConfig],
         provider_mgr,
+        toolkit,
     ):
         """初始化 Manager-Worker 模式"""
         # 创建 Manager
@@ -158,7 +160,7 @@ class SessionManager:
         if not provider or not provider.api_key:
             print(f"⚠️ [Session] Manager provider 未配置，回退到 MsgHub 模式")
             session.use_manager_mode = False
-            await self._init_msghub(session, worker_configs, provider_mgr)
+            await self._init_msghub(session, worker_configs, provider_mgr, toolkit)
             return
 
         try:
@@ -169,12 +171,13 @@ class SessionManager:
                 personality=manager_config.personality,
                 llm_config=llm_config,
                 skill_names=[],
+                toolkit=toolkit,
             )
             session.manager = manager
         except Exception as e:
             print(f"⚠️ [Session] 创建 Manager 失败: {e}")
             session.use_manager_mode = False
-            await self._init_msghub(session, worker_configs, provider_mgr)
+            await self._init_msghub(session, worker_configs, provider_mgr, toolkit)
             return
 
         # 创建 Workers
@@ -192,8 +195,10 @@ class SessionManager:
                     personality=config.personality,
                     specialty=config.specialty or "通用任务",
                     expertise=config.expertise or config.role,
+                    worker_id=config.id,
                     llm_config=llm_config,
                     skill_names=config.skill_ids,
+                    toolkit=toolkit,
                 )
                 workers.append(worker)
             except Exception as e:
@@ -211,6 +216,7 @@ class SessionManager:
         session: UserSession,
         worker_configs: List[AgentConfig],
         provider_mgr,
+        toolkit,
     ):
         """初始化 MsgHub 模式"""
         agents = []
@@ -227,6 +233,7 @@ class SessionManager:
                     personality=config.personality,
                     llm_config=llm_config,
                     skill_names=config.skill_ids,
+                    toolkit=toolkit,
                 )
                 agents.append(agent)
             except Exception as e:

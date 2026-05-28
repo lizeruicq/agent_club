@@ -5,26 +5,105 @@
 """
 import os
 from pathlib import Path
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Optional
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
 
 
-# 工作目录（默认项目根目录）
-WORKING_DIR = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# 默认项目根目录。用户运行时会通过 ContextVar 注入自己的 workspace。
+PROJECT_ROOT = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+WORKING_DIR = PROJECT_ROOT
+
+
+@dataclass(frozen=True)
+class FileWorkspace:
+    """Agent 文件工具可访问的用户级工作区。"""
+    root_dir: Path
+    preview_dir: Path
+    doc_dir: Path
+
+
+_CURRENT_WORKSPACE: ContextVar[Optional[FileWorkspace]] = ContextVar(
+    "agent_file_workspace",
+    default=None,
+)
+
+
+def build_workspace(root_dir: str, preview_dir: str, doc_dir: str) -> FileWorkspace:
+    """构建规范化的文件工具工作区。"""
+    return FileWorkspace(
+        root_dir=Path(root_dir).expanduser().resolve(),
+        preview_dir=Path(preview_dir).expanduser().resolve(),
+        doc_dir=Path(doc_dir).expanduser().resolve(),
+    )
+
+
+def get_working_dir() -> Path:
+    """获取当前工具调用的默认工作目录。"""
+    workspace = _CURRENT_WORKSPACE.get()
+    return workspace.root_dir if workspace else WORKING_DIR
+
+
+@contextmanager
+def workspace_context(workspace: Optional[FileWorkspace]):
+    """在一次工具调用期间绑定用户工作区。"""
+    if workspace is None:
+        yield
+        return
+    token = _CURRENT_WORKSPACE.set(workspace)
+    try:
+        yield
+    finally:
+        _CURRENT_WORKSPACE.reset(token)
+
+
+def _is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
 
 
 def _resolve_file_path(file_path: str) -> str:
     """
     解析文件路径
-    - 绝对路径直接使用
-    - 相对路径从WORKING_DIR解析
+    - 无用户 workspace 时，相对路径从项目根目录解析
+    - 有用户 workspace 时，路径限制在用户 output 目录内
+    - output/preview/* 映射到用户 HTML 预览目录
+    - output/doc/* 映射到用户文档产出目录
     """
+    workspace = _CURRENT_WORKSPACE.get()
+    raw = (file_path or "").strip().replace("\\", "/").lstrip("/")
+
+    if workspace:
+        if raw == "output":
+            candidate = workspace.root_dir
+        elif raw.startswith("output/preview/"):
+            candidate = workspace.preview_dir / raw.removeprefix("output/preview/")
+        elif raw.startswith("output/doc/"):
+            candidate = workspace.doc_dir / raw.removeprefix("output/doc/")
+        elif raw.startswith("output/"):
+            candidate = workspace.root_dir / raw.removeprefix("output/")
+        else:
+            path = Path(file_path).expanduser()
+            candidate = path if path.is_absolute() else workspace.root_dir / raw
+
+        resolved = candidate.resolve()
+        allowed_roots = (workspace.root_dir, workspace.preview_dir, workspace.doc_dir)
+        if not any(_is_relative_to(resolved, root) for root in allowed_roots):
+            raise ValueError(
+                f"路径 {file_path} 不在当前用户工作区内；请使用 output/preview/、output/doc/ 或相对路径"
+            )
+        return str(resolved)
+
     path = Path(file_path).expanduser()
     if path.is_absolute():
         return str(path)
-    else:
-        return str(WORKING_DIR / file_path)
+    return str(WORKING_DIR / file_path)
 
 
 async def read_file(
@@ -68,7 +147,12 @@ async def read_file(
                 )]
             )
 
-    file_path = _resolve_file_path(file_path)
+    try:
+        file_path = _resolve_file_path(file_path)
+    except Exception as e:
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"错误: 路径无效 - {e}")]
+        )
 
     # 检查文件存在性
     if not os.path.exists(file_path):
@@ -147,7 +231,12 @@ async def write_file(file_path: str, content: str) -> ToolResponse:
             content=[TextBlock(type="text", text="错误: 未提供 file_path")]
         )
 
-    file_path = _resolve_file_path(file_path)
+    try:
+        file_path = _resolve_file_path(file_path)
+    except Exception as e:
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"错误: 路径无效 - {e}")]
+        )
 
     try:
         # 确保目录存在
@@ -187,7 +276,12 @@ async def edit_file(file_path: str, old_text: str, new_text: str) -> ToolRespons
             content=[TextBlock(type="text", text="错误: 未提供 file_path")]
         )
 
-    resolved_path = _resolve_file_path(file_path)
+    try:
+        resolved_path = _resolve_file_path(file_path)
+    except Exception as e:
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"错误: 路径无效 - {e}")]
+        )
 
     if not os.path.exists(resolved_path):
         return ToolResponse(
@@ -250,7 +344,12 @@ async def append_file(file_path: str, content: str) -> ToolResponse:
             content=[TextBlock(type="text", text="错误: 未提供 file_path")]
         )
 
-    file_path = _resolve_file_path(file_path)
+    try:
+        file_path = _resolve_file_path(file_path)
+    except Exception as e:
+        return ToolResponse(
+            content=[TextBlock(type="text", text=f"错误: 路径无效 - {e}")]
+        )
 
     try:
         # 确保目录存在
