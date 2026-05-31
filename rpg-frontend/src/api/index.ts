@@ -35,6 +35,14 @@ const client = axios.create({
   },
 })
 
+const platformClient = axios.create({
+  baseURL: '/platform/api',
+  timeout: 60000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+})
+
 // ============ Token 管理 ============
 
 const TOKEN_KEY = 'agent_club_token'
@@ -64,24 +72,33 @@ export function setSavedUser(user: { id: string; username: string; nickname: str
 }
 
 // axios 拦截器: 自动带 token
-client.interceptors.request.use((config) => {
+function attachAuthToken(config: any) {
   const token = getToken()
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config
-})
+}
+
+client.interceptors.request.use(attachAuthToken)
+platformClient.interceptors.request.use(attachAuthToken)
 
 // axios 拦截器: 401 时清除 token
+function handleAuthError(error: any) {
+  if (error.response?.status === 401) {
+    clearToken()
+    window.dispatchEvent(new Event('auth:logout'))
+  }
+  return Promise.reject(error)
+}
+
 client.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      clearToken()
-      window.dispatchEvent(new Event('auth:logout'))
-    }
-    return Promise.reject(error)
-  }
+  handleAuthError
+)
+platformClient.interceptors.response.use(
+  (response) => response,
+  handleAuthError
 )
 
 export const api = {
@@ -529,10 +546,7 @@ export const api = {
     conversation_id?: string
     content?: string
   }): Promise<{ success: boolean; work_id: string; title: string; message: string }> {
-    const token = getToken()
-    const response = await axios.post('/platform/api/publish', data, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    })
+    const response = await platformClient.post('/publish', data)
     return response.data
   },
 
@@ -544,22 +558,19 @@ export const api = {
     tag?: string
     search?: string
   }): Promise<{ works: PlazaWork[]; total: number; page: number; page_size: number }> {
-    const response = await axios.get('/platform/api/works', { params })
+    const response = await platformClient.get('/works', { params })
     return response.data
   },
 
   // 获取单个作品详情
   async getPlazaWork(workId: string): Promise<PlazaWork> {
-    const response = await axios.get(`/platform/api/works/${workId}`)
+    const response = await platformClient.get(`/works/${workId}`)
     return response.data
   },
 
   // 删除广场作品
   async deletePlazaWork(workId: string): Promise<{ success: boolean; message: string }> {
-    const token = getToken()
-    const response = await axios.delete(`/platform/api/works/${workId}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    })
+    const response = await platformClient.delete(`/works/${workId}`)
     return response.data
   },
 }
@@ -570,12 +581,14 @@ export interface PlazaWork {
   title: string
   description: string
   author: string
+  author_id: string
   tags: string
   file_size: number
   view_count: number
   status: string
   created_at: string
   updated_at: string
+  is_mine: boolean
 }
 
 // Provider 类型信息

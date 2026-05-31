@@ -82,9 +82,11 @@ export function PlazaPage() {
               >
                 新窗口打开
               </a>
-              <button className="btn-delete" onClick={() => handleDelete(selectedWork.id)}>
-                删除
-              </button>
+              {selectedWork.is_mine && (
+                <button className="btn-delete" onClick={() => handleDelete(selectedWork.id)}>
+                  删除
+                </button>
+              )}
             </div>
           </div>
           <div className="plaza-detail-preview">
