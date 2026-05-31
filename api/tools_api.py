@@ -5,8 +5,9 @@ from typing import List, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from auth.user_managers import get_user_tool_registry
+from auth.user_managers import clear_user_runtime_caches, get_user_tool_registry
 from auth.dependencies import get_current_user
+from api.session_manager import session_manager
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
 
@@ -84,6 +85,8 @@ async def update_tool(tool_name: str, request: UpdateToolRequest, user: dict = D
 
     # 保存配置
     tool_registry.save_config()
+    clear_user_runtime_caches(user["id"])
+    session_manager.remove_session(user["id"])
 
     return ToolUpdateResponse(
         success=True,
@@ -113,6 +116,8 @@ async def update_tools_batch(request: UpdateToolsRequest, user: dict = Depends(g
 
     # 保存配置
     tool_registry.save_config()
+    clear_user_runtime_caches(user["id"])
+    session_manager.remove_session(user["id"])
 
     message = f"成功更新 {success_count} 个工具状态"
     if failed_tools:

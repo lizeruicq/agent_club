@@ -280,26 +280,26 @@ export interface ToolUpdateResponse {
   message: string
 }
 
-// ========== HTML Preview 类型 ==========
+// ========== Artifact 类型 ==========
 
-export interface HtmlFileInfo {
+export type ArtifactStorage = 'preview' | 'doc'
+export type ArtifactRenderMode = 'html' | 'markdown' | 'text' | 'download'
+
+export interface ArtifactFileInfo {
+  storage: ArtifactStorage
   filename: string
+  path: string
   size: number
   created_at: number
   updated_at: number
+  extension: string
+  render_mode: ArtifactRenderMode
 }
 
-export interface HtmlPreviewListResponse {
-  files: HtmlFileInfo[]
-}
-
-export interface SaveHtmlRequest {
+export interface ArtifactContentResponse {
+  success: boolean
+  storage: ArtifactStorage
   filename: string
   content: string
-}
-
-export interface SaveHtmlResponse {
-  success: boolean
-  filename: string
-  message: string
+  render_mode: ArtifactRenderMode
 }

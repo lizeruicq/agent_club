@@ -4,6 +4,7 @@
 """
 import json
 import os
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -21,6 +22,11 @@ class ConversationManager:
 
     def _path(self, conv_id: str) -> str:
         return os.path.join(self._dir, f"{conv_id}.json")
+
+    @staticmethod
+    def sanitize_id(conv_id: str) -> str:
+        cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", (conv_id or "").strip())
+        return cleaned[:80]
 
     def _read(self, conv_id: str) -> Optional[Dict[str, Any]]:
         path = self._path(conv_id)
@@ -78,9 +84,12 @@ class ConversationManager:
         title: str,
         messages: List[Dict[str, Any]],
         snapshots: Dict[str, Any],
+        conv_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """创建新会话"""
-        conv_id = f"conv_{uuid.uuid4().hex[:12]}"
+        conv_id = self.sanitize_id(conv_id or "") or f"conv_{uuid.uuid4().hex[:12]}"
+        if os.path.exists(self._path(conv_id)):
+            return self.update(conv_id, messages, snapshots) or {}
         now = datetime.now().isoformat()
         conv = {
             "id": conv_id,

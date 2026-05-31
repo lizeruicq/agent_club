@@ -4,10 +4,10 @@
       "id": "provider",
       "name": "qwen3.5",
       "provider_type": "dashscope",
-      "base_url": "",
-      "api_key": "sk-5ff8523713e14bbe92521a9a9fb0abe8",
-      "model_id": "qwen3.5-flash",
-      "model_name": "qwen3.5-flash",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "sk-xxxxxxxxxxx",
+      "model_id": "kimi-k2.6",
+      "model_name": "kimi-k2.6",
       "is_active": false
     }
   ],

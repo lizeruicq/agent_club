@@ -2,7 +2,11 @@ import { useState, useEffect } from 'react'
 import type { ManagerConfig, Provider } from '../types'
 import { api } from '../api'
 
-export const ManagerConfigPage = () => {
+interface ManagerConfigPageProps {
+  conversationId?: string
+}
+
+export const ManagerConfigPage = ({ conversationId }: ManagerConfigPageProps) => {
   const [, setManager] = useState<ManagerConfig | null>(null)
   const [providers, setProviders] = useState<Provider[]>([])
   const [loading, setLoading] = useState(true)
@@ -76,7 +80,7 @@ export const ManagerConfigPage = () => {
 
       // 重新初始化系统
       try {
-        await api.reinitializeSystem()
+        await api.reinitializeSystem(conversationId)
         console.log('System reinitialized successfully')
       } catch (reinitError) {
         console.warn('System reinitialization failed:', reinitError)

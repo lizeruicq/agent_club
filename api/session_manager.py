@@ -25,6 +25,7 @@ class UserSession:
     manager: Optional[Any] = None
     workers: list = field(default_factory=list)
     use_manager_mode: bool = False
+    active_conversation_id: Optional[str] = None
     last_active: float = field(default_factory=time.time)
 
     # 场景注入状态（per-user）
@@ -46,6 +47,7 @@ class UserSession:
         self.manager = None
         self.workers = []
         self.use_manager_mode = False
+        self.active_conversation_id = None
         self.last_scene_key = None
         self.last_scene_desc = None
 
@@ -90,7 +92,7 @@ class SessionManager:
         """活跃 session 数量"""
         return len(self._sessions)
 
-    async def init_user_session(self, user_id: str) -> UserSession:
+    async def init_user_session(self, user_id: str, conversation_id: Optional[str] = None) -> UserSession:
         """
         初始化用户的 Agent 运行时会话。
         从用户专属的配置文件加载 providers、agents、manager，创建 Agent 实例。
@@ -99,20 +101,21 @@ class SessionManager:
 
         session = self.get_session(user_id)
 
-        # 如果已初始化，直接返回
-        if session.initialized:
+        # 如果已初始化且仍在同一会话文件工作区，直接返回
+        if session.initialized and session.active_conversation_id == conversation_id:
             return session
 
         async with self._lock:
             # 二次检查（防止并发重复初始化）
-            if session.initialized:
+            if session.initialized and session.active_conversation_id == conversation_id:
                 return session
 
             session.reset()
+            session.active_conversation_id = conversation_id
 
             # 获取用户专属配置管理器
             agents_mgr, manager_mgr, provider_mgr = get_user_managers(user_id)
-            tool_registry = get_user_tool_registry(user_id)
+            tool_registry = get_user_tool_registry(user_id, conversation_id)
             toolkit = tool_registry.get_toolkit()
 
             # 获取配置
@@ -130,10 +133,10 @@ class SessionManager:
                 await self._init_msghub(session, worker_configs, provider_mgr, toolkit)
 
             session.initialized = True
-            print(f"✅ [Session] user={user_id} 初始化完成: mode={'manager' if session.use_manager_mode else 'msghub'}, agents={len(session.agents)}")
+            print(f"✅ [Session] user={user_id} 初始化完成: conversation={conversation_id or 'default'}, mode={'manager' if session.use_manager_mode else 'msghub'}, agents={len(session.agents)}")
             return session
 
-    async def reinitialize_user_session(self, user_id: str) -> UserSession:
+    async def reinitialize_user_session(self, user_id: str, conversation_id: Optional[str] = None) -> UserSession:
         """重新初始化用户会话（用户修改配置后调用）"""
         from auth.user_managers import clear_user_runtime_caches
 
@@ -144,7 +147,7 @@ class SessionManager:
         self.remove_session(user_id)
 
         # 重新初始化
-        return await self.init_user_session(user_id)
+        return await self.init_user_session(user_id, conversation_id)
 
     async def _init_manager_worker(
         self,

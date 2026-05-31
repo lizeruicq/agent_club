@@ -259,29 +259,29 @@ class ChatAgent(AgentBase):
         """
         return await self.react_agent.reply(msg)
 
-
-def create_default_agents(llm_config: Dict[str, Any]) -> List[ChatAgent]:
-    """
-    创建默认的双 Agent 配置
-
-    Args:
-        llm_config: 语言模型配置
-
-    Returns:
-        包含两个 Agent 的列表
-    """
-    agent1 = ChatAgent(
-        name="小智",
-        role="办公室技术专家",
-        personality="专业、理性、喜欢分享技术知识，说话简洁明了，偶尔会给出实用的建议",
-        llm_config=llm_config,
-    )
-
-    agent2 = ChatAgent(
-        name="小美",
-        role="办公室行政助理",
-        personality="热情、友好、善于沟通，说话温柔体贴，喜欢帮助同事解决问题",
-        llm_config=llm_config,
-    )
-
-    return [agent1, agent2]
+#
+# def create_default_agents(llm_config: Dict[str, Any]) -> List[ChatAgent]:
+#     """
+#     创建默认的双 Agent 配置
+#
+#     Args:
+#         llm_config: 语言模型配置
+#
+#     Returns:
+#         包含两个 Agent 的列表
+#     """
+#     agent1 = ChatAgent(
+#         name="小智",
+#         role="办公室技术专家",
+#         personality="专业、理性、喜欢分享技术知识，说话简洁明了，偶尔会给出实用的建议",
+#         llm_config=llm_config,
+#     )
+#
+#     agent2 = ChatAgent(
+#         name="小美",
+#         role="办公室行政助理",
+#         personality="热情、友好、善于沟通，说话温柔体贴，喜欢帮助同事解决问题",
+#         llm_config=llm_config,
+#     )
+#
+#     return [agent1, agent2]

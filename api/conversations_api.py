@@ -8,6 +8,7 @@
 """
 import json
 import os
+import shutil
 from typing import Any, Dict, List
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
@@ -38,6 +39,12 @@ def _write_json_file(path: str, data: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _conversation_output_path(user_id: str, conv_id: str) -> str:
+    ud = get_user_data(user_id)
+    safe_id = ud.sanitize_conversation_id(conv_id)
+    return os.path.join(ud.output_dir, "conversations", safe_id)
 
 
 def _take_snapshots(user_id: str) -> Dict[str, Any]:
@@ -72,6 +79,7 @@ def _derive_title(messages: List[Dict[str, Any]]) -> str:
 class SaveConversationRequest(BaseModel):
     messages: List[Dict[str, Any]] = Field(default_factory=list)
     confirm_delete_oldest: bool = False
+    conversation_id: str = ""
 
 
 class UpdateConversationRequest(BaseModel):
@@ -120,11 +128,20 @@ async def save_conversation(req: SaveConversationRequest, user: dict = Depends(g
             )
         oldest = mgr.get_oldest_meta()
         if oldest:
-            mgr.delete(oldest["id"])
+            oldest_id = oldest["id"]
+            mgr.delete(oldest_id)
+            oldest_output = _conversation_output_path(user_id, oldest_id)
+            if os.path.isdir(oldest_output):
+                shutil.rmtree(oldest_output, ignore_errors=True)
 
     title = _derive_title(req.messages)
     snapshots = _take_snapshots(user_id)
-    conv = mgr.create(title=title, messages=req.messages, snapshots=snapshots)
+    conv = mgr.create(
+        title=title,
+        messages=req.messages,
+        snapshots=snapshots,
+        conv_id=req.conversation_id,
+    )
     return {"conversation": conv}
 
 
@@ -147,9 +164,13 @@ async def update_conversation(
 
 @router.delete("/{conv_id}")
 async def delete_conversation(conv_id: str, user: dict = Depends(get_current_user)):
-    ok = _mgr(user["id"]).delete(conv_id)
+    user_id = user["id"]
+    ok = _mgr(user_id).delete(conv_id)
     if not ok:
         raise HTTPException(status_code=404, detail="会话不存在")
+    conv_output = _conversation_output_path(user_id, conv_id)
+    if os.path.isdir(conv_output):
+        shutil.rmtree(conv_output, ignore_errors=True)
     return {"success": True}
 
 
@@ -165,7 +186,7 @@ async def restore_conversation(conv_id: str, user: dict = Depends(get_current_us
     _apply_snapshots(user_id, snapshots)
 
     try:
-        await session_manager.reinitialize_user_session(user_id)
+        await session_manager.reinitialize_user_session(user_id, conv_id)
     except Exception as e:
         print(f"⚠️ restore reinit failed: {e}")
 

@@ -67,6 +67,11 @@ BUILD_FRONTEND = args.build or not args.dev
 
 class ChatRequest(BaseModel):
     message: str
+    conversation_id: Optional[str] = None
+
+
+class ReinitializeRequest(BaseModel):
+    conversation_id: Optional[str] = None
 
 
 class AgentResponse(BaseModel):
@@ -226,7 +231,7 @@ def _wrap_message_with_scene(message: str, session: UserSession) -> str:
     return f"【场景背景】{scene_desc}\n\n{message}"
 
 
-async def _get_user_session(request: Request) -> UserSession:
+async def _get_user_session(request: Request, conversation_id: Optional[str] = None) -> UserSession:
     """从请求中获取当前用户的 session（按需初始化）"""
     from auth.dependencies import get_current_user
 
@@ -234,8 +239,8 @@ async def _get_user_session(request: Request) -> UserSession:
     user_id = user["id"]
     session = session_manager.get_session(user_id)
 
-    if not session.initialized:
-        await session_manager.init_user_session(user_id)
+    if not session.initialized or session.active_conversation_id != conversation_id:
+        await session_manager.init_user_session(user_id, conversation_id)
 
     return session
 
@@ -345,7 +350,7 @@ async def list_agents(request: Request):
 
 
 @app.post("/api/system/reinitialize")
-async def reinitialize(request: Request):
+async def reinitialize(request: Request, body: Optional[ReinitializeRequest] = None):
     """重新初始化当前用户的 Agent 会话"""
     from auth.dependencies import get_current_user
 
@@ -355,9 +360,10 @@ async def reinitialize(request: Request):
         raise HTTPException(status_code=401, detail="未登录")
 
     user_id = user["id"]
+    conversation_id = body.conversation_id if body else None
     try:
         print(f"🔄 Reinitializing session for user={user_id}...")
-        session = await session_manager.reinitialize_user_session(user_id)
+        session = await session_manager.reinitialize_user_session(user_id, conversation_id)
         agent_count = len(session.agents)
         print(f"✅ Session reinitialized: user={user_id}, agents={agent_count}")
 
@@ -375,7 +381,7 @@ async def reinitialize(request: Request):
 async def chat(request: Request, chat_request: ChatRequest):
     """聊天接口 - 支持 Manager-Worker 和 MsgHub 两种模式（per-user session）"""
     try:
-        session = await _get_user_session(request)
+        session = await _get_user_session(request, chat_request.conversation_id)
     except Exception:
         raise HTTPException(status_code=401, detail="未登录，无法使用聊天功能")
 
@@ -520,7 +526,7 @@ async def _chat_with_msghub(chat_request: ChatRequest, session: UserSession) -> 
 async def chat_stream(request: Request, chat_request: ChatRequest):
     """流式聊天接口 - 使用 Server-Sent Events（per-user session）"""
     try:
-        session = await _get_user_session(request)
+        session = await _get_user_session(request, chat_request.conversation_id)
     except Exception:
         raise HTTPException(status_code=401, detail="未登录，无法使用聊天功能")
 

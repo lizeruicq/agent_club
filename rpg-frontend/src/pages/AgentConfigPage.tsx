@@ -51,7 +51,11 @@ const avatarTypeAliases: Record<string, string> = {
 const normalizeAvatarType = (avatarType: string | undefined, fallback: string) =>
   avatarType ? (avatarTypeAliases[avatarType] ?? avatarType) : fallback
 
-export const AgentConfigPage = () => {
+interface AgentConfigPageProps {
+  conversationId: string
+}
+
+export const AgentConfigPage = ({ conversationId }: AgentConfigPageProps) => {
   const [agents, setAgents] = useState<AgentConfig[]>([])
   const [manager, setManager] = useState<AgentConfig | null>(null)
   const [providers, setProviders] = useState<Provider[]>([])
@@ -206,7 +210,7 @@ export const AgentConfigPage = () => {
       await loadData()
       // 自动重新初始化系统以加载新 Agent
       try {
-        await api.reinitializeSystem()
+        await api.reinitializeSystem(conversationId)
         console.log('System reinitialized successfully')
       } catch (reinitError) {
         console.warn('System reinitialization failed:', reinitError)
@@ -247,7 +251,7 @@ export const AgentConfigPage = () => {
       await loadData()
       // 重新初始化系统
       try {
-        await api.reinitializeSystem()
+        await api.reinitializeSystem(conversationId)
         console.log('System reinitialized successfully')
       } catch (reinitError) {
         console.warn('System reinitialization failed:', reinitError)
@@ -294,7 +298,7 @@ export const AgentConfigPage = () => {
       await loadData()
       // 删除后重新初始化系统
       try {
-        await api.reinitializeSystem()
+        await api.reinitializeSystem(conversationId)
         console.log('System reinitialized after deletion')
       } catch (reinitError) {
         console.warn('System reinitialization failed:', reinitError)
@@ -312,7 +316,7 @@ export const AgentConfigPage = () => {
 
     setReinitializing(true)
     try {
-      const result = await api.reinitializeSystem()
+      const result = await api.reinitializeSystem(conversationId)
       alert(`系统已重新初始化，共加载 ${result.agent_count} 个 Agent`)
     } catch (error) {
       console.error('Failed to reinitialize:', error)

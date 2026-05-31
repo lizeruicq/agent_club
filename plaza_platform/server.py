@@ -59,7 +59,8 @@ class PublishRequest(BaseModel):
     title: str
     description: str = ""
     tags: str = ""  # 逗号分隔
-    source_file: Optional[str] = None  # 用户 preview 目录下的文件名
+    source_file: Optional[str] = None  # 当前会话 preview 目录下的文件名
+    conversation_id: Optional[str] = None
     content: Optional[str] = None  # 或者直接传 HTML 内容
 
 
@@ -110,10 +111,15 @@ async def publish_work(req: PublishRequest, request: Request):
     if not html_content:
         if not req.source_file:
             raise HTTPException(status_code=400, detail="必须提供 source_file 或 content")
-        # 从用户的 preview 目录读取
+        # 从当前会话的 preview 目录读取
         from auth.user_data import get_user_data
         user_data = get_user_data(user["id"])
-        source_path = os.path.join(user_data.preview_dir, req.source_file)
+        if not req.conversation_id:
+            raise HTTPException(status_code=400, detail="必须提供 conversation_id")
+        preview_dir = user_data.conversation_preview_dir(req.conversation_id)
+        source_path = os.path.join(preview_dir, req.source_file)
+        if os.path.commonpath([os.path.normpath(preview_dir), os.path.normpath(source_path)]) != os.path.normpath(preview_dir):
+            raise HTTPException(status_code=400, detail="源文件路径无效")
         if not os.path.exists(source_path):
             raise HTTPException(status_code=404, detail=f"源文件不存在: {req.source_file}")
         with open(source_path, "r", encoding="utf-8") as f:

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import type { HtmlFileInfo } from '../types'
+import { useState, useEffect, useCallback } from 'react'
+import type { ArtifactFileInfo } from '../types'
 import { api } from '../api'
 
 const RefreshIcon = () => (
@@ -32,11 +32,11 @@ const NewFileIcon = () => (
   </svg>
 )
 
-const GlobeIcon = () => (
+const WorkspaceIcon = () => (
   <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10"/>
-    <line x1="2" y1="12" x2="22" y2="12"/>
-    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+    <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+    <path d="M8 13h8"/>
+    <path d="M8 16h5"/>
   </svg>
 )
 
@@ -50,49 +50,95 @@ function formatTime(timestamp: number): string {
   return new Date(timestamp * 1000).toLocaleString()
 }
 
-export function HtmlPreviewPage() {
-  const [files, setFiles] = useState<HtmlFileInfo[]>([])
-  const [selectedFile, setSelectedFile] = useState<string | null>(null)
+function storageLabel(file: ArtifactFileInfo): string {
+  return file.storage === 'preview' ? 'HTML' : '文档'
+}
+
+function encodePath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
+
+interface HtmlPreviewPageProps {
+  conversationId: string
+}
+
+export function HtmlPreviewPage({ conversationId }: HtmlPreviewPageProps) {
+  const [files, setFiles] = useState<ArtifactFileInfo[]>([])
+  const [selectedFile, setSelectedFile] = useState<ArtifactFileInfo | null>(null)
+  const [artifactContent, setArtifactContent] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [isContentLoading, setIsContentLoading] = useState(false)
   const [showNewModal, setShowNewModal] = useState(false)
   const [newFilename, setNewFilename] = useState('')
   const [newContent, setNewContent] = useState('')
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<ArtifactFileInfo | null>(null)
   const [showPublishModal, setShowPublishModal] = useState(false)
   const [publishTitle, setPublishTitle] = useState('')
   const [publishDesc, setPublishDesc] = useState('')
   const [publishAuthor, setPublishAuthor] = useState('')
   const [publishTags, setPublishTags] = useState('')
   const [isPublishing, setIsPublishing] = useState(false)
-  const iframeRef = useRef<HTMLIFrameElement>(null)
 
   const loadFiles = useCallback(async () => {
     setIsLoading(true)
     try {
-      const list = await api.getHtmlPreviews()
+      const list = await api.getArtifacts(conversationId)
       setFiles(list)
-      // If selected file no longer exists, clear selection
-      if (selectedFile && !list.find(f => f.filename === selectedFile)) {
+      if (selectedFile && !list.find(f => f.path === selectedFile.path)) {
         setSelectedFile(null)
       }
     } catch (err) {
-      console.error('Failed to load HTML previews:', err)
+      console.error('Failed to load artifacts:', err)
     } finally {
       setIsLoading(false)
     }
-  }, [selectedFile])
+  }, [selectedFile, conversationId])
 
   useEffect(() => {
     loadFiles()
   }, [loadFiles])
 
-  const handleDelete = async (filename: string) => {
+  useEffect(() => {
+    if (!selectedFile || selectedFile.render_mode === 'html') {
+      setArtifactContent('')
+      return
+    }
+
+    let cancelled = false
+    setIsContentLoading(true)
+    api.getArtifactContent(selectedFile.storage, selectedFile.filename, conversationId)
+      .then(result => {
+        if (!cancelled) {
+          setArtifactContent(result.content)
+        }
+      })
+      .catch(err => {
+        console.error('Failed to load artifact content:', err)
+        if (!cancelled) {
+          setArtifactContent('无法读取该文件内容')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsContentLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedFile, conversationId])
+
+  const handleDelete = async (file: ArtifactFileInfo) => {
     try {
-      await api.deleteHtmlPreview(filename)
+      await api.deleteArtifact(file.storage, file.filename, conversationId)
       setShowDeleteConfirm(null)
+      if (selectedFile?.path === file.path) {
+        setSelectedFile(null)
+      }
       loadFiles()
     } catch (err) {
-      console.error('Failed to delete file:', err)
+      console.error('Failed to delete artifact:', err)
       alert('删除失败')
     }
   }
@@ -101,7 +147,7 @@ export function HtmlPreviewPage() {
     const name = newFilename.trim()
     if (!name) return
     try {
-      await api.saveHtmlPreview({ filename: name, content: newContent })
+      await api.saveHtmlPreview({ filename: name, content: newContent }, conversationId)
       setShowNewModal(false)
       setNewFilename('')
       setNewContent('')
@@ -112,8 +158,10 @@ export function HtmlPreviewPage() {
     }
   }
 
+  const canPublish = selectedFile?.storage === 'preview' && selectedFile.render_mode === 'html'
+
   const handlePublish = async () => {
-    if (!selectedFile || !publishTitle.trim()) return
+    if (!selectedFile || !canPublish || !publishTitle.trim()) return
     setIsPublishing(true)
     try {
       const result = await api.publishWork({
@@ -121,7 +169,8 @@ export function HtmlPreviewPage() {
         description: publishDesc.trim(),
         author: publishAuthor.trim() || '匿名用户',
         tags: publishTags.trim(),
-        source_file: selectedFile,
+        source_file: selectedFile.filename,
+        conversation_id: conversationId,
       })
       if (result.success) {
         alert(`发布成功！作品: ${result.title}`)
@@ -139,26 +188,26 @@ export function HtmlPreviewPage() {
   }
 
   const openPublishModal = () => {
-    if (!selectedFile) {
-      alert('请先选择一个文件')
+    if (!canPublish || !selectedFile) {
+      alert('只有 HTML 预览文件可以发布到广场')
       return
     }
-    // 自动填充标题为文件名（去扩展名）
-    setPublishTitle(selectedFile.replace(/\.html$/i, ''))
+    setPublishTitle(selectedFile.filename.replace(/\.html$/i, ''))
     setShowPublishModal(true)
   }
 
-  const previewUrl = selectedFile ? `/preview/${selectedFile}` : ''
+  const previewUrl = selectedFile && canPublish
+    ? `/preview/${encodePath(selectedFile.filename)}?conversation_id=${encodeURIComponent(conversationId)}`
+    : ''
 
   return (
     <div className="html-preview-page">
       <div className="html-preview-header">
-        <h2>网页预览</h2>
-        <p className="header-desc">查看和管理 AI 生成的 HTML 文件</p>
+        <h2>产物预览</h2>
+        <p className="header-desc">查看 Agent 生成的 HTML 和文档产物</p>
       </div>
 
       <div className="html-preview-layout">
-        {/* 左侧文件列表 */}
         <div className="html-preview-sidebar">
           <div className="sidebar-toolbar">
             <button
@@ -182,22 +231,23 @@ export function HtmlPreviewPage() {
           <div className="file-list">
             {files.length === 0 ? (
               <div className="file-list-empty">
-                <GlobeIcon />
-                <p>暂无 HTML 文件</p>
-                <span>AI 生成的 HTML 将显示在这里</span>
+                <WorkspaceIcon />
+                <p>暂无产物</p>
+                <span>Agent 生成的 HTML 和文档会显示在这里</span>
               </div>
             ) : (
               files.map(file => (
                 <div
-                  key={file.filename}
-                  className={`file-item ${selectedFile === file.filename ? 'active' : ''}`}
-                  onClick={() => setSelectedFile(file.filename)}
+                  key={file.path}
+                  className={`file-item ${selectedFile?.path === file.path ? 'active' : ''}`}
+                  onClick={() => setSelectedFile(file)}
                 >
                   <div className="file-icon">
                     <FileIcon />
                   </div>
                   <div className="file-info">
-                    <div className="file-name" title={file.filename}>
+                    <div className="file-name" title={file.path}>
+                      <span className={`artifact-badge ${file.storage}`}>{storageLabel(file)}</span>
                       {file.filename}
                     </div>
                     <div className="file-meta">
@@ -208,7 +258,7 @@ export function HtmlPreviewPage() {
                     className="file-delete-btn"
                     onClick={(e) => {
                       e.stopPropagation()
-                      setShowDeleteConfirm(file.filename)
+                      setShowDeleteConfirm(file)
                     }}
                     title="删除"
                   >
@@ -220,45 +270,59 @@ export function HtmlPreviewPage() {
           </div>
         </div>
 
-        {/* 右侧预览区域 */}
         <div className="html-preview-content">
           {selectedFile ? (
             <>
               <div className="preview-toolbar">
-                <span className="preview-filename">{selectedFile}</span>
-                <button className="toolbar-btn publish" onClick={openPublishModal}>
-                  发布到广场
-                </button>
-                <a
-                  href={previewUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="toolbar-link"
-                >
-                  新窗口打开
-                </a>
+                <span className="preview-filename">{selectedFile.path}</span>
+                {canPublish && (
+                  <>
+                    <button className="toolbar-btn publish" onClick={openPublishModal}>
+                      发布到广场
+                    </button>
+                    <a
+                      href={previewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="toolbar-link"
+                    >
+                      新窗口打开
+                    </a>
+                  </>
+                )}
               </div>
-              <div className="preview-iframe-wrapper">
-                <iframe
-                  ref={iframeRef}
-                  src={previewUrl}
-                  title={selectedFile}
-                  className="preview-iframe"
-                  sandbox="allow-scripts allow-same-origin allow-popups"
-                />
-              </div>
+              {canPublish ? (
+                <div className="preview-iframe-wrapper">
+                  <iframe
+                    src={previewUrl}
+                    title={selectedFile.filename}
+                    className="preview-iframe"
+                    sandbox="allow-scripts allow-same-origin allow-popups"
+                  />
+                </div>
+              ) : (
+                <div className="preview-iframe-wrapper artifact-text-wrapper">
+                  {isContentLoading ? (
+                    <div className="preview-placeholder">
+                      <WorkspaceIcon />
+                      <p>正在读取文件</p>
+                    </div>
+                  ) : (
+                    <pre className="artifact-text-content">{artifactContent}</pre>
+                  )}
+                </div>
+              )}
             </>
           ) : (
             <div className="preview-placeholder">
-              <GlobeIcon />
+              <WorkspaceIcon />
               <p>选择左侧文件进行预览</p>
-              <span>或者点击"新建"创建一个 HTML 文件</span>
+              <span>HTML 会以网页方式展示，文档会以文本方式展示</span>
             </div>
           )}
         </div>
       </div>
 
-      {/* 新建文件弹窗 */}
       {showNewModal && (
         <div className="modal-overlay" onClick={() => setShowNewModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
@@ -298,7 +362,6 @@ export function HtmlPreviewPage() {
         </div>
       )}
 
-      {/* 发布弹窗 */}
       {showPublishModal && (
         <div className="modal-overlay" onClick={() => setShowPublishModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
@@ -356,12 +419,11 @@ export function HtmlPreviewPage() {
         </div>
       )}
 
-      {/* 删除确认弹窗 */}
       {showDeleteConfirm && (
         <div className="modal-overlay" onClick={() => setShowDeleteConfirm(null)}>
           <div className="modal-content small" onClick={e => e.stopPropagation()}>
             <h3>确认删除</h3>
-            <p>确定要删除 <strong>{showDeleteConfirm}</strong> 吗？此操作不可撤销。</p>
+            <p>确定要删除 <strong>{showDeleteConfirm.path}</strong> 吗？此操作不可撤销。</p>
             <div className="modal-actions">
               <button className="btn secondary" onClick={() => setShowDeleteConfirm(null)}>
                 取消

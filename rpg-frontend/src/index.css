@@ -1873,6 +1873,30 @@ html, body, #root {
   text-overflow: ellipsis;
 }
 
+.artifact-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 18px;
+  margin-right: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: #0f172a;
+  vertical-align: middle;
+}
+
+.artifact-badge.preview {
+  background: var(--pixel-accent);
+}
+
+.artifact-badge.doc {
+  background: #feca57;
+}
+
 .file-meta {
   font-size: 11px;
   color: var(--pixel-surface);
@@ -1911,7 +1935,7 @@ html, body, #root {
 .preview-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--pixel-surface);
   background: rgba(0, 0, 0, 0.3);
@@ -1919,9 +1943,14 @@ html, body, #root {
 }
 
 .preview-filename {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   color: var(--pixel-text);
   font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toolbar-link {
@@ -1945,6 +1974,23 @@ html, body, #root {
   height: 100%;
   border: none;
   background: #fff;
+}
+
+.artifact-text-wrapper {
+  overflow: auto;
+  background: #101827;
+}
+
+.artifact-text-content {
+  min-height: 100%;
+  margin: 0;
+  padding: 20px;
+  color: #e5e7eb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .preview-placeholder {

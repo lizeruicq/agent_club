@@ -2,14 +2,13 @@
 管理者智能体 - 负责任务分析、规划和分派
 基于 AgentScope 实现 Manager-Worker 协作模式
 """
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, Literal
 import json
 import asyncio
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
 from agentscope.model import DashScopeChatModel, OpenAIChatModel, AnthropicChatModel
 from agentscope.formatter import OpenAIChatFormatter
-from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit
 from pydantic import BaseModel, Field
 
@@ -42,7 +41,16 @@ class TaskPlanStepModel(BaseModel):
     agent_name: Optional[str] = None
     task: str = Field(..., min_length=1)
     input: str = ""
-    output: str = Field(..., min_length=1)
+    artifact_type: Literal[
+        "none",
+        "document",
+        "html",
+        "code",
+        "analysis",
+        "test_report",
+        "data",
+    ] = "none"
+    output: Optional[str] = None
     depends_on: List[int] = Field(default_factory=list)
 
 
@@ -103,9 +111,6 @@ class ManagerAgent(AgentBase):
         # Worker注册表
         self._workers: Dict[str, 'WorkerAgent'] = {}
         self._workers_by_name: Dict[str, 'WorkerAgent'] = {}
-
-        # 共享记忆（所有Worker共用，确保彼此可见对话历史）
-        self.shared_memory = InMemoryMemory()
 
         # 任务历史
         self._task_history: List[TaskPlan] = []
@@ -170,8 +175,6 @@ class ManagerAgent(AgentBase):
         self._workers[worker.worker_id] = worker
         self._workers_by_name[worker.name] = worker
         worker.set_manager(self)  # 告诉Worker谁是Manager
-        # 将共享记忆注入Worker，使所有Worker可见同一份对话历史
-        worker.set_shared_memory(self.shared_memory)
         print(f"✅ Manager 注册 Worker: {worker.name} ({worker.specialty})")
 
     def get_worker_capabilities(self) -> str:
@@ -217,9 +220,6 @@ class ManagerAgent(AgentBase):
         print(f"🎯 [Manager] 收到用户请求: {user_content[:50]}...")
         print(f"{'='*60}")
 
-        # 将用户请求写入共享记忆，使所有Worker可见
-        await self.shared_memory.add(msg)
-
         # 步骤1: 分析请求并制定计划
         print(f"\n📋 [Manager] 步骤1: 分析请求并制定计划...")
         self._emit("manager_thinking", agent_name=self.name, role=self.role, content="正在分析任务需求...")
@@ -259,8 +259,6 @@ class ManagerAgent(AgentBase):
             content=final_response,
             role="assistant"
         )
-        # 将Manager的最终回复写入共享记忆
-        await self.shared_memory.add(final_msg)
         return final_msg
 
     async def _create_task_plan(self, user_request: str) -> TaskPlan:
@@ -279,10 +277,12 @@ class ManagerAgent(AgentBase):
 2. 如果需要多个步骤或不同专长，制定分派计划
 
 文件协作约定（必须遵守）：
-- 产品/设计类文档（PRD、需求说明等）必须保存到 output/doc/ 目录。该路径会自动映射到当前用户的文档工作区。
-- 前端代码必须生成纯 HTML 文件（所有 CSS 和 JavaScript 都内联写在同一个 HTML 文件里，不单独生成 .css 或 .js 文件），保存到 output/preview/ 目录。该路径会自动映射到当前用户的预览工作区。
-- 如涉及文件依赖，请在 input 中明确文件路径
-- 每个步骤都必须包含 output 字段，指定产出的文件路径
+- 不要按团队成员名称决定是否产出文件，要根据用户请求和步骤真实需要决定。
+- artifact_type 表示该步骤主要产物类型：none、document、html、code、analysis、test_report、data。
+- 只有需要被用户查看、后续步骤读取或持久保存的产物，才填写 output；纯讨论、判断、协调类步骤使用 artifact_type="none"，output 可省略。
+- output 是给文件工具使用的逻辑保存目标，不要在任务说明中解释真实磁盘目录或用户目录映射。
+- 可交互 HTML 产物应尽量写成单文件，CSS/JavaScript 内联。
+- 如步骤依赖上游产物，请在 input 中明确需要读取的文件引用。
 
 请以JSON格式回复：
 {{
@@ -295,7 +295,8 @@ class ManagerAgent(AgentBase):
             "agent_name": "负责该步骤的Agent名称，仅用于展示",
             "task": "具体任务描述",
             "input": "需要传递给Agent的输入",
-            "output": "产出的文件路径（如 output/doc/prd.md 或 output/preview/index.html）",
+            "artifact_type": "none/document/html/code/analysis/test_report/data",
+            "output": "可选，只有需要持久化产物时填写；无产物时省略",
             "depends_on": []  // 依赖的步骤ID
         }}
     ]
@@ -384,7 +385,8 @@ class ManagerAgent(AgentBase):
                 "agent_name": worker.name,
                 "task": step.task.strip(),
                 "input": step.input.strip(),
-                "output": step.output.strip(),
+                "artifact_type": step.artifact_type,
+                "output": step.output.strip() if step.output else None,
                 "depends_on": depends_on,
             })
         return normalized
@@ -477,10 +479,42 @@ class ManagerAgent(AgentBase):
             unique_files = sorted(set(file_refs))
             result += (
                 f"\n\n【必读文件】\n"
-                f"以上仅为概览，开发必须依据以下原始文档，请先读取：\n"
+                f"以上仅为概览；如你的任务需要使用上游产物，请先读取以下原始文件：\n"
                 + "\n".join(f"- read_file('{f}')" for f in unique_files)
             )
         return result
+
+    def _build_file_instruction(self, step: Dict) -> str:
+        """根据计划中的产物类型和路径生成文件协作提示。"""
+        artifact_type = step.get("artifact_type") or "none"
+        output_file = (step.get("output") or "").strip()
+        file_notes = []
+
+        if step.get("depends_on"):
+            file_notes.append("【前置读取】如任务需要使用上游产物，请优先按【必读文件】中的文件引用调用 read_file 读取原文，不要只依赖摘要。")
+
+        if not output_file:
+            if artifact_type != "none":
+                file_notes.append("【产出判断】当前步骤标记为需要产物，但计划未指定保存目标；如确需保存，请自拟清晰文件名并在回复中说明。")
+            return "\n".join(file_notes)
+
+        if output_file.startswith("output/doc/") or artifact_type in {"document", "analysis", "test_report"}:
+            file_notes.append("【文档保存】请将本步骤需要持久化的文档、分析或报告保存到【产出要求】指定的位置。")
+        elif output_file.startswith("output/preview/") or artifact_type == "html":
+            file_notes.append("【HTML保存】请将可预览的 HTML 保存到【产出要求】指定的位置。")
+            file_notes.append("【HTML要求】除非用户明确要求多文件项目，HTML 应尽量包含内联 CSS 和 JavaScript，完成后不需要打开浏览器预览、截图或发送文件。")
+        else:
+            file_notes.append("【文件保存】请将本步骤需要持久化的产物保存到【产出要求】指定的位置。")
+
+        return "\n".join(file_notes)
+
+    def _step_timeout_seconds(self, step: Dict) -> float:
+        """根据步骤是否需要持久化产物设置超时。"""
+        artifact_type = step.get("artifact_type") or "none"
+        output_file = (step.get("output") or "").strip()
+        if artifact_type != "none" or output_file:
+            return 600.0
+        return 120.0
 
     async def _execute_step(self, step: Dict, task_plan: TaskPlan):
         """执行单个步骤"""
@@ -514,16 +548,7 @@ class ManagerAgent(AgentBase):
             task_plan, step.get("depends_on", [])
         )
 
-        # 构建文件协作约定提示
-        file_notes = []
-        if any(kw in agent_name for kw in ["产品", "设计", "需求"]):
-            file_notes.append("【文档保存】如产出PRD、设计文档、需求说明等，请保存到 output/doc/ 目录；系统会自动写入当前用户的文档工作区。")
-        if any(kw in agent_name for kw in ["前端", "后端", "开发", "程序"]):
-            if step.get("depends_on"):
-                file_notes.append("【文档读取】上游步骤的文档可能保存在 output/doc/ 目录，请先搜索并读取相关文件后再开始开发。")
-            file_notes.append("【代码保存】代码文件请保存到 output/preview/ 目录下；系统会自动写入当前用户的 HTML 预览工作区。")
-            file_notes.append("【禁止预览】完成开发后，只需将 HTML 文件保存到指定目录即可，不需要打开浏览器预览、截图或发送文件给用户。")
-        file_instruction = "\n".join(file_notes)
+        file_instruction = self._build_file_instruction(step)
 
         # 构建精简的任务消息
         if context_str:
@@ -557,8 +582,7 @@ class ManagerAgent(AgentBase):
             role="user"
         )
 
-        # 根据任务类型设置超时：开发类任务给10分钟，其他2分钟
-        timeout_seconds = 600.0 if any(kw in agent_name for kw in ["前端", "后端", "开发", "程序"]) else 120.0
+        timeout_seconds = self._step_timeout_seconds(step)
 
         try:
             # 调用Worker，添加超时保护
@@ -572,13 +596,6 @@ class ManagerAgent(AgentBase):
             result_summary = self._extract_summary(response.content)
             result_preview = result_summary[:100] if result_summary else ""
             print(f"      ✅ {agent_name} 完成，摘要: {result_preview}...")
-
-            # Manager 统一决定写入共享记忆的内容：精简摘要
-            await self.shared_memory.add(Msg(
-                name=agent_name,
-                content=result_summary[:1000],
-                role="assistant"
-            ))
 
             # 从摘要中提取文件路径，供下游步骤引用
             referenced_files = self._extract_file_paths(result_summary)
@@ -753,9 +770,8 @@ class WorkerAgent:
         self.expertise = expertise
         self._manager: Optional[ManagerAgent] = None
         self._available_tools = tools or []
-        self._shared_memory = None
 
-        # 初始化底层Agent（shared_memory 稍后通过 set_shared_memory 注入）
+        # 初始化底层 Agent
         from .chat_agent import ChatAgent
 
         # 构建带工具限制的llm_config
@@ -777,12 +793,6 @@ class WorkerAgent:
     def set_manager(self, manager: ManagerAgent):
         """设置Manager"""
         self._manager = manager
-
-    def set_shared_memory(self, memory):
-        """保存共享记忆引用，由 Manager 统一决定写入内容"""
-        self._shared_memory = memory
-        # Worker 的 ReActAgent 使用独立 memory，工具调用历史不污染共享记忆
-        # Manager 在 Worker 完成后决定把什么摘要写入共享记忆
 
     async def reply(self, msg: Msg) -> Msg:
         """响应Manager分派的任务"""

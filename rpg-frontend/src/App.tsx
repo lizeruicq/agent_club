@@ -17,6 +17,11 @@ import { api, getToken, getSavedUser } from './api'
 
 type Page = 'chat' | 'agents' | 'providers' | 'tools' | 'skills' | 'scenes' | 'preview' | 'plaza'
 
+function createConversationId(): string {
+  const random = Math.random().toString(36).slice(2, 10)
+  return `conv_${Date.now().toString(36)}_${random}`
+}
+
 // 图标组件
 const ChatIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -233,8 +238,8 @@ function App() {
 
   // 历史会话弹层
   const [historyOpen, setHistoryOpen] = useState(false)
-  // 当前会话来自哪条历史；null = 全新对话（保存时会 create），非空 = 恢复自历史（保存时会 update）
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null)
+  // 当前会话 ID 同时作为产物工作区 ID；全新对话会先生成 ID，保存历史时沿用该 ID。
+  const [currentConversationId, setCurrentConversationId] = useState<string>(() => createConversationId())
 
   // 获取 Agent 列表（登录后才获取）
   useEffect(() => {
@@ -306,6 +311,7 @@ function App() {
     // 开始流式请求
     api.chatStream(
       text,
+      currentConversationId,
       (chunk) => {
         console.log('📦 收到流式数据:', chunk.type, chunk.agent_name, chunk.content?.slice(0, 20))
 
@@ -429,7 +435,7 @@ function App() {
       }
     )
 
-  }, [isProcessing])
+  }, [isProcessing, currentConversationId])
 
   // 同步机器人状态到场景 - 只对活跃 Agent 生效
   useEffect(() => {
@@ -462,14 +468,14 @@ function App() {
           if (err?.response?.status !== 404) throw err
         }
       }
-      let result = await api.saveCurrentConversation(messages, false)
+      let result = await api.saveCurrentConversation(messages, false, currentConversationId)
       if (result.requiresConfirmation) {
         const oldestTitle = result.oldest?.title || '最早的会话'
         const ok = window.confirm(
           `历史会话已达上限（${result.max} 条）。\n继续将删除最早的会话「${oldestTitle}」。\n是否继续？`
         )
         if (!ok) return false
-        result = await api.saveCurrentConversation(messages, true)
+        result = await api.saveCurrentConversation(messages, true, currentConversationId)
       }
       return true
     } catch (err) {
@@ -488,12 +494,14 @@ function App() {
     const saved = await persistCurrentToHistory()
     if (!saved) return
     try {
-      await api.reinitializeSystem()
+      const nextConversationId = createConversationId()
+      await api.reinitializeSystem(nextConversationId)
+      setCurrentConversationId(nextConversationId)
     } catch (err) {
       console.warn('Reinitialize failed:', err)
+      setCurrentConversationId(createConversationId())
     }
     setMessages([])
-    setCurrentConversationId(null)
   }, [isProcessing, persistCurrentToHistory])
 
   // 选中历史会话：把当前持久化 → restore 选中条 → 用快照覆盖前端状态
@@ -734,7 +742,7 @@ function App() {
           </div>
         )}
 
-        {currentPage === 'agents' && <AgentConfigPage />}
+        {currentPage === 'agents' && <AgentConfigPage conversationId={currentConversationId} />}
         {currentPage === 'providers' && <ProviderConfigPage />}
         {currentPage === 'tools' && <ToolConfigPage />}
         {currentPage === 'skills' && <SkillConfigPage />}
@@ -746,7 +754,7 @@ function App() {
             }}
           />
         )}
-        {currentPage === 'preview' && <HtmlPreviewPage />}
+        {currentPage === 'preview' && <HtmlPreviewPage conversationId={currentConversationId} />}
         {currentPage === 'plaza' && <PlazaPage />}
       </main>
 
@@ -755,7 +763,7 @@ function App() {
         onClose={() => setHistoryOpen(false)}
         onSelect={handleSelectConversation}
         onDeleted={(id) => {
-          if (id === currentConversationId) setCurrentConversationId(null)
+          if (id === currentConversationId) setCurrentConversationId(createConversationId())
         }}
       />
     </div>

@@ -5,6 +5,7 @@
 import os
 import json
 import shutil
+import re
 from typing import Dict, Any
 
 # 项目根目录
@@ -30,8 +31,7 @@ class UserDataService:
         self._doc_dir = os.path.join(self._output_dir, "doc")
         # 确保目录存在
         os.makedirs(self._data_dir, exist_ok=True)
-        os.makedirs(self._preview_dir, exist_ok=True)
-        os.makedirs(self._doc_dir, exist_ok=True)
+        os.makedirs(self._output_dir, exist_ok=True)
 
     @property
     def data_dir(self) -> str:
@@ -52,6 +52,34 @@ class UserDataService:
     def doc_dir(self) -> str:
         """用户文档产出目录"""
         return self._doc_dir
+
+    @staticmethod
+    def sanitize_conversation_id(conversation_id: str) -> str:
+        """把会话 ID 规范化为安全目录名。"""
+        cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", (conversation_id or "").strip())
+        return cleaned[:80] or "default"
+
+    def conversation_output_dir(self, conversation_id: str) -> str:
+        """指定会话的产出根目录。"""
+        path = os.path.join(
+            self._output_dir,
+            "conversations",
+            self.sanitize_conversation_id(conversation_id),
+        )
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def conversation_preview_dir(self, conversation_id: str) -> str:
+        """指定会话的 HTML 预览目录。"""
+        path = os.path.join(self.conversation_output_dir(conversation_id), "preview")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def conversation_doc_dir(self, conversation_id: str) -> str:
+        """指定会话的文档产出目录。"""
+        path = os.path.join(self.conversation_output_dir(conversation_id), "doc")
+        os.makedirs(path, exist_ok=True)
+        return path
 
     @property
     def agents_config_file(self) -> str:

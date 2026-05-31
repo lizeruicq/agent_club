@@ -16,7 +16,9 @@ import type {
   ToolUpdateResponse,
   ManagerConfig,
   Skill,
-  HtmlFileInfo,
+  ArtifactFileInfo,
+  ArtifactStorage,
+  ArtifactContentResponse,
   ConversationMeta,
 } from '../types'
 import type { GameConfig } from '../game/config'
@@ -120,8 +122,8 @@ export const api = {
   // ========== 聊天 API ==========
 
   // 聊天 - 返回多 Agent 响应
-  async chat(message: string): Promise<AgentResponse[]> {
-    const response = await client.post<ChatResponse>('/chat', { message })
+  async chat(message: string, conversationId?: string): Promise<AgentResponse[]> {
+    const response = await client.post<ChatResponse>('/chat', { message, conversation_id: conversationId })
     return response.data.responses
   },
 
@@ -145,7 +147,8 @@ export const api = {
    */
   async saveCurrentConversation(
     messages: ChatMessage[],
-    confirmDeleteOldest: boolean = false
+    confirmDeleteOldest: boolean = false,
+    conversationId?: string
   ): Promise<{
     conversation?: ConversationMeta
     requiresConfirmation?: boolean
@@ -155,7 +158,7 @@ export const api = {
     try {
       const response = await client.post<{ conversation: ConversationMeta }>(
         '/conversations',
-        { messages, confirm_delete_oldest: confirmDeleteOldest }
+        { messages, confirm_delete_oldest: confirmDeleteOldest, conversation_id: conversationId || '' }
       )
       return { conversation: response.data.conversation }
     } catch (err: any) {
@@ -301,8 +304,8 @@ export const api = {
   // ========== 系统 API ==========
 
   // 重新初始化系统（在 Agent 变更后调用）
-  async reinitializeSystem(): Promise<{ success: boolean; message: string; agent_count: number }> {
-    const response = await client.post('/system/reinitialize')
+  async reinitializeSystem(conversationId?: string): Promise<{ success: boolean; message: string; agent_count: number }> {
+    const response = await client.post('/system/reinitialize', { conversation_id: conversationId })
     return response.data
   },
 
@@ -330,6 +333,7 @@ export const api = {
 
   chatStream(
     message: string,
+    conversationId: string | undefined,
     onChunk: (chunk: { type: string; content?: string; agent_name?: string; agent_role?: string; index?: number; message?: string }) => void,
     onError?: (error: string) => void
   ): () => void {
@@ -349,7 +353,7 @@ export const api = {
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           headers,
-          body: JSON.stringify({ message }),
+          body: JSON.stringify({ message, conversation_id: conversationId }),
           signal: controller.signal,
         })
 
@@ -478,27 +482,38 @@ export const api = {
 
   // ========== HTML Preview API ==========
 
-  // 获取所有 HTML 预览文件
-  async getHtmlPreviews(): Promise<HtmlFileInfo[]> {
-    const response = await client.get<{ files: HtmlFileInfo[] }>('/html-preview')
+  async saveHtmlPreview(
+    data: { filename: string; content: string },
+    conversationId: string
+  ): Promise<{ success: boolean; filename: string; message: string }> {
+    const response = await client.post('/html-preview', data, {
+      params: { conversation_id: conversationId },
+    })
+    return response.data
+  },
+
+  // ========== Artifacts API ==========
+
+  async getArtifacts(conversationId: string): Promise<ArtifactFileInfo[]> {
+    const response = await client.get<{ files: ArtifactFileInfo[] }>('/artifacts', {
+      params: { conversation_id: conversationId },
+    })
     return response.data.files
   },
 
-  // 保存 HTML 文件
-  async saveHtmlPreview(data: { filename: string; content: string }): Promise<{ success: boolean; filename: string; message: string }> {
-    const response = await client.post('/html-preview', data)
+  async getArtifactContent(storage: ArtifactStorage, filename: string, conversationId: string): Promise<ArtifactContentResponse> {
+    const encodedPath = filename.split('/').map(encodeURIComponent).join('/')
+    const response = await client.get<ArtifactContentResponse>(`/artifacts/${storage}/${encodedPath}/content`, {
+      params: { conversation_id: conversationId },
+    })
     return response.data
   },
 
-  // 获取 HTML 文件内容
-  async getHtmlPreviewContent(filename: string): Promise<{ success: boolean; filename: string; content: string }> {
-    const response = await client.get(`/html-preview/${encodeURIComponent(filename)}/content`)
-    return response.data
-  },
-
-  // 删除 HTML 文件
-  async deleteHtmlPreview(filename: string): Promise<{ success: boolean; message: string }> {
-    const response = await client.delete(`/html-preview/${encodeURIComponent(filename)}`)
+  async deleteArtifact(storage: ArtifactStorage, filename: string, conversationId: string): Promise<{ success: boolean; message: string }> {
+    const encodedPath = filename.split('/').map(encodeURIComponent).join('/')
+    const response = await client.delete(`/artifacts/${storage}/${encodedPath}`, {
+      params: { conversation_id: conversationId },
+    })
     return response.data
   },
 
@@ -511,9 +526,13 @@ export const api = {
     author?: string
     tags?: string
     source_file?: string
+    conversation_id?: string
     content?: string
   }): Promise<{ success: boolean; work_id: string; title: string; message: string }> {
-    const response = await axios.post('/platform/api/publish', data)
+    const token = getToken()
+    const response = await axios.post('/platform/api/publish', data, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
     return response.data
   },
 
@@ -537,7 +556,10 @@ export const api = {
 
   // 删除广场作品
   async deletePlazaWork(workId: string): Promise<{ success: boolean; message: string }> {
-    const response = await axios.delete(`/platform/api/works/${workId}`)
+    const token = getToken()
+    const response = await axios.delete(`/platform/api/works/${workId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
     return response.data
   },
 }
