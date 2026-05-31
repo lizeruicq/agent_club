@@ -1,185 +1,165 @@
-# RPG Chat - 2D 像素风聊天界面
+# RPG Frontend
 
-基于 React + Phaser 的 RPG 风格 RAG 知识库聊天系统。
+`rpg-frontend` 是当前项目的 React + Phaser 前端。它负责 RPG 场景渲染、聊天窗口、配置页面、HTML 预览和作品广场。
 
-![RPG Chat Preview](./docs/rpg-preview.png)
-
-## ✨ 特性
-
-- 🎮 **2D RPG 像素风格** - 玩家角色与 AI 机器人在游戏场景中对话
-- 🤖 **机器人动画状态** - 待机(idle) / 思考(thinking) / 说话(speaking) 三种状态
-- 💬 **对话气泡系统** - 带打字机效果的弹出式对话
-- ✨ **粒子特效** - 发送消息时的视觉反馈
-- 📁 **文档管理面板** - 上传/删除/查看知识库文档
-- ⚡ **实时状态同步** - React UI 与 Phaser 场景双向通信
-
-## 🏗️ 架构
-
-```
-┌─────────────────────────────────────────────┐
-│  前端 (React + Phaser)                       │
-│  ┌───────────────────────────────────────┐  │
-│  │  Phaser Canvas                        │  │
-│  │  - ChatScene.ts (游戏场景)             │  │
-│  │  - 玩家角色 (蓝色冒险者)                │  │
-│  │  - NPC机器人 (紫色AI助手)              │  │
-│  │  - 对话气泡 + 粒子特效                  │  │
-│  └───────────────────────────────────────┘  │
-│                ↑                            │
-│  ┌─────────────┴───────────────────────┐    │
-│  │  React UI Overlay                   │    │
-│  │  - StatusBar (状态栏)               │    │
-│  │  - ChatInput (输入框)               │    │
-│  │  - DocPanel (文档管理)              │    │
-│  └─────────────────────────────────────┘    │
-└─────────────────────────────────────────────┘
-                     ↑↓ HTTP/WebSocket
-┌─────────────────────────────────────────────┐
-│  后端 (FastAPI)                              │
-│  - /api/chat      - 对话接口                 │
-│  - /api/upload    - 文档上传                 │
-│  - /api/docs      - 文档列表                 │
-│  - /api/delete    - 删除文档                 │
-│  - /api/stats     - 统计信息                 │
-└─────────────────────────────────────────────┘
-```
-
-## 🚀 快速开始
-
-### 方式一：单命令启动（推荐，像 Copaw 一样）
+## 启动
 
 ```bash
-# 1. 确保虚拟环境已激活
-source .venv/bin/activate
-
-# 2. 安装前端依赖（首次运行）
-cd rpg-frontend && npm install
-
-# 3. 回到根目录，启动服务
-cd ..
-python api_server.py
-```
-
-第一次启动会自动构建前端，之后访问：
-**http://localhost:8000**
-
-### 方式二：开发模式（热更新）
-
-适合开发调试，前后端分开启动：
-
-```bash
-# 终端 1：启动后端（仅 API，不构建前端）
-python api_server.py --dev
-
-# 终端 2：启动前端（热更新）
 cd rpg-frontend
+npm install
 npm run dev
 ```
 
-访问 http://localhost:5173
+开发模式访问：
 
-**区别说明：**
-
-| 模式 | 后端角色 | 前端来源 | 访问地址 |
-|------|---------|---------|----------|
-| 生产模式 | API + 前端静态文件 | `rpg-frontend/dist` | `localhost:8000` |
-| 开发模式 | 仅 API | Vite 开发服务器 | `localhost:5173` |
-
-## 📁 项目结构
-
-```
-rpg-frontend/
-├── src/
-│   ├── game/
-│   │   └── ChatScene.ts      # Phaser 游戏场景
-│   ├── components/
-│   │   ├── ChatInput.tsx     # 聊天输入框
-│   │   ├── DocPanel.tsx      # 文档管理面板
-│   │   └── StatusBar.tsx     # 状态栏
-│   ├── api/
-│   │   └── index.ts          # API 客户端
-│   ├── types/
-│   │   └── index.ts          # TypeScript 类型
-│   ├── App.tsx               # 主应用组件
-│   └── index.css             # 全局样式
-├── package.json
-├── vite.config.ts
-└── index.html
-
-api_server.py                 # FastAPI 后端
+```text
+http://localhost:5173
 ```
 
-## 🎮 游戏场景说明
+构建：
 
-### ChatScene.ts 核心功能
-
-| 功能 | 描述 |
-|------|------|
-| `createPlayer()` | 创建玩家角色（蓝色冒险者） |
-| `createNPC()` | 创建 AI 机器人（紫色机器人带天线） |
-| `showPlayerDialog(text)` | 显示玩家对话气泡 |
-| `showNPCDialog(text, onComplete)` | 显示 NPC 对话（打字机效果） |
-| `setRobotStatus(status)` | 切换机器人动画状态 |
-| `playParticleEffect()` | 播放金色粒子特效 |
-
-### 机器人状态动画
-
-- **idle**: 轻微上下浮动 + 暗淡光晕
-- **thinking**: 左右摇晃 + 脉冲发光
-- **speaking**: 缩放弹跳 + 稳定光晕
-
-## 🔌 API 接口
-
-| 端点 | 方法 | 描述 |
-|------|------|------|
-| `/api/chat` | POST | 发送消息获取回复 |
-| `/api/upload` | POST | 上传文档到知识库 |
-| `/api/docs` | GET | 获取所有文档列表 |
-| `/api/docs/{id}` | DELETE | 删除指定文档 |
-| `/api/stats` | GET | 获取文档统计信息 |
-| `/api/health` | GET | 健康检查 |
-
-## 🎨 像素风设计
-
-- **配色**: 深色背景(#2d3436) + 高饱和度像素色
-- **字体**: 'Press Start 2P' (英文) + 'Noto Sans SC' (中文)
-- **边框**: 4px 实线边框模拟像素感
-- **动画**: 使用 Phaser Tween 实现平滑动画
-
-## 🔧 自定义配置
-
-### 修改场景布局
-
-编辑 `src/game/ChatScene.ts`:
-
-```typescript
-private readonly PLAYER_X = 200    // 玩家 X 位置
-private readonly NPC_X = 600       // NPC X 位置
-private readonly GROUND_Y = 400    // 地面 Y 位置
-private readonly SCALE = 3         // 角色缩放
+```bash
+npm run build
 ```
 
-### 修改主题颜色
+## 当前页面
 
-编辑 `src/index.css`:
+主入口是 `src/App.tsx`，当前页面包括：
 
-```css
-:root {
-  --pixel-bg: #2d3436;
-  --pixel-accent: #00b894;
-  --pixel-warning: #fdcb6e;
-  /* ... */
+- `chat`：RPG 场景和浮动聊天窗口。
+- `agents`：Agent 配置。
+- `providers`：Provider 配置。
+- `tools`：工具开关。
+- `skills`：技能配置。
+- `scenes`：场景配置。
+- `preview`：当前会话产物和 HTML 预览。
+- `plaza`：作品广场。
+
+## 聊天流式展示
+
+前端通过 `src/api/index.ts` 中的 `api.chatStream()` 请求：
+
+```text
+POST /api/chat/stream
+```
+
+请求会携带：
+
+```json
+{
+  "message": "...",
+  "conversation_id": "conv_xxx"
 }
 ```
 
-## 📦 技术栈
+`src/App.tsx` 会按 SSE 事件更新 `messages`：
 
-- **React 18** - UI 框架
-- **Phaser 3** - 2D 游戏引擎
-- **Vite** - 构建工具
-- **TypeScript** - 类型安全
-- **FastAPI** - 后端 API
+- `start` / `agent_start`：创建一条空消息。
+- `chunk`：向已有消息追加文本。
+- `done` / `agent_done`：结束该消息的流式状态。
+- `all_done`：恢复空闲状态。
+- `error`：显示错误消息。
 
-## 📝 许可证
+因此，普通文本要显示在聊天框中，通常需要先收到 `start` 或 `agent_start`，再收到同一 `agent_name` 的 `chunk`。
 
-与原项目保持一致
+Manager-Worker 模式下，目前聊天框会显示：
+
+- 用户消息。
+- Manager 规划原文，前缀为 `【Manager规划原文】`。
+- Worker 的执行结果。
+- Manager 复盘和追加任务提示。
+- Manager 最终整合回复。
+
+## 会话与产物
+
+前端会在新会话开始时生成 `conversation_id`，并在聊天、预览、发布等接口中传给后端。
+
+当前会话产物通过 `HtmlPreviewPage.tsx` 展示，接口主要使用：
+
+- `/api/artifacts`
+- `/api/artifacts/{storage}/{filepath}/content`
+- `/api/artifacts/{storage}/{filepath}`
+- `/preview/{filepath}`
+
+这些接口都依赖当前 `conversation_id`，因此不同会话看到的产物列表不同。
+
+## 作品广场
+
+`PlazaPage.tsx` 展示 `/platform/api/works` 返回的作品。发布入口在 `HtmlPreviewPage.tsx`。
+
+广场 API 客户端使用单独的 `platformClient`，会自动携带登录 token。因此后端可以返回正确的 `is_mine` 字段，前端只对自己的作品显示删除按钮。
+
+发布当前会话中的 HTML 文件时，请求会带上：
+
+```json
+{
+  "source_file": "index.html",
+  "conversation_id": "conv_xxx"
+}
+```
+
+## 游戏资源
+
+公共资源位于：
+
+```text
+rpg-frontend/public/assets/
+├── characters/
+│   ├── boy_idle.png
+│   ├── boy_walk.png
+│   ├── girl_idle.png
+│   ├── girl_walk.png
+│   ├── mafia1_idle.png
+│   ├── mafia1_walk.png
+│   ├── mafia2_idle.png
+│   ├── mafia2_walk.png
+│   ├── mafia3_idle.png
+│   └── mafia3_walk.png
+├── maps/
+│   ├── library.tmj
+│   ├── office.tmj
+│   └── ...
+└── game-config.json
+```
+
+`src/game/ChatScene.ts` 会读取 `game-config.json` 中的角色、动画和场景配置。旧的 `manager` / `worker1` 角色引用在前端中有兼容映射，分别指向当前的 `boy` / `girl`。
+
+## 目录结构
+
+```text
+rpg-frontend/
+├── src/
+│   ├── App.tsx                 # 主 UI、导航、聊天流式事件处理
+│   ├── api/index.ts            # API 客户端
+│   ├── game/
+│   │   ├── ChatScene.ts        # Phaser 场景
+│   │   └── config.ts           # 游戏配置读取
+│   ├── pages/
+│   │   ├── AgentConfigPage.tsx
+│   │   ├── ProviderConfigPage.tsx
+│   │   ├── ToolConfigPage.tsx
+│   │   ├── SkillConfigPage.tsx
+│   │   ├── SceneSelectPage.tsx
+│   │   ├── HtmlPreviewPage.tsx
+│   │   ├── PlazaPage.tsx
+│   │   └── LoginPage.tsx
+│   ├── components/
+│   │   ├── ChatInput.tsx
+│   │   ├── ConversationHistory.tsx
+│   │   ├── StatusBar.tsx
+│   │   └── ...
+│   ├── types/index.ts
+│   └── index.css
+├── public/assets/
+├── package.json
+├── vite.config.ts
+└── index.html
+```
+
+## 技术栈
+
+- React 18
+- TypeScript
+- Vite
+- Phaser 3
+- Axios / Fetch

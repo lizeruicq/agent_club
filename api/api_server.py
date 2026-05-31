@@ -589,6 +589,12 @@ async def chat_stream(request: Request, chat_request: ChatRequest):
                             task_desc = data.get("task", "")
                             yield f"data: {json.dumps({'type': 'agent_start', 'agent_name': agent_name, 'agent_role': task_desc[:40], 'index': 1})}\n\n"
 
+                        elif event_type == "manager_thinking":
+                            content = data.get("content", "")
+                            if content:
+                                yield f"data: {json.dumps({'type': 'start', 'agent_name': manager.name, 'agent_role': manager.role, 'index': 0})}\n\n"
+                                yield f"data: {json.dumps({'type': 'chunk', 'content': content, 'agent_name': manager.name, 'index': 0})}\n\n"
+
                         elif event_type == "worker_done":
                             agent_name = data.get("agent_name", "Worker")
                             result = data.get("result", "")
@@ -600,6 +606,19 @@ async def chat_stream(request: Request, chat_request: ChatRequest):
                         elif event_type == "manager_integrating":
                             # Manager 开始整合，发送开始事件
                             yield f"data: {json.dumps({'type': 'start', 'agent_name': manager.name, 'agent_role': manager.role, 'index': 0})}\n\n"
+
+                        elif event_type == "manager_reviewing":
+                            content = data.get("content", "正在评估团队成员的执行结果...")
+                            yield f"data: {json.dumps({'type': 'chunk', 'content': content, 'agent_name': manager.name, 'index': 0})}\n\n"
+
+                        elif event_type == "plan_updated":
+                            added_steps = data.get("added_steps", [])
+                            if added_steps:
+                                content = "Manager 评估后追加任务：" + "；".join(
+                                    f"{s.get('agent_name', 'Worker')} - {s.get('task', '')[:40]}"
+                                    for s in added_steps
+                                )
+                                yield f"data: {json.dumps({'type': 'chunk', 'content': content, 'agent_name': manager.name, 'index': 0})}\n\n"
 
                     elif kind == "final":
                         final_answer = data

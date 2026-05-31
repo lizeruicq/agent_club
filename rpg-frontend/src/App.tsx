@@ -17,9 +17,21 @@ import { api, getToken, getSavedUser } from './api'
 
 type Page = 'chat' | 'agents' | 'providers' | 'tools' | 'skills' | 'scenes' | 'preview' | 'plaza'
 
+const CURRENT_CONVERSATION_KEY = 'agent_club_current_conversation_id'
+
 function createConversationId(): string {
   const random = Math.random().toString(36).slice(2, 10)
   return `conv_${Date.now().toString(36)}_${random}`
+}
+
+function getInitialConversationId(): string {
+  try {
+    const saved = localStorage.getItem(CURRENT_CONVERSATION_KEY)
+    if (saved && saved.trim()) return saved
+  } catch {
+    // localStorage may be unavailable in restricted environments.
+  }
+  return createConversationId()
 }
 
 // 图标组件
@@ -239,7 +251,15 @@ function App() {
   // 历史会话弹层
   const [historyOpen, setHistoryOpen] = useState(false)
   // 当前会话 ID 同时作为产物工作区 ID；全新对话会先生成 ID，保存历史时沿用该 ID。
-  const [currentConversationId, setCurrentConversationId] = useState<string>(() => createConversationId())
+  const [currentConversationId, setCurrentConversationId] = useState<string>(() => getInitialConversationId())
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CURRENT_CONVERSATION_KEY, currentConversationId)
+    } catch {
+      // Ignore localStorage write failures.
+    }
+  }, [currentConversationId])
 
   // 获取 Agent 列表（登录后才获取）
   useEffect(() => {
@@ -763,7 +783,11 @@ function App() {
         onClose={() => setHistoryOpen(false)}
         onSelect={handleSelectConversation}
         onDeleted={(id) => {
-          if (id === currentConversationId) setCurrentConversationId(createConversationId())
+          if (id === currentConversationId) {
+            const nextConversationId = createConversationId()
+            setCurrentConversationId(nextConversationId)
+            setMessages([])
+          }
         }}
       />
     </div>

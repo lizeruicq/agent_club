@@ -13,6 +13,12 @@ from agentscope.tool import Toolkit
 from pydantic import BaseModel, Field
 
 from tools import get_toolkit
+from tools.builtin.file_io import workspace_context
+
+
+MAX_REVIEW_ROUNDS = 3
+MAX_TOTAL_STEPS = 10
+MAX_NEW_STEPS_PER_REVIEW = 3
 
 
 class TaskPlan:
@@ -61,6 +67,35 @@ class TaskPlanDecisionModel(BaseModel):
     steps: List[TaskPlanStepModel] = Field(default_factory=list)
 
 
+class TaskReviewStepModel(BaseModel):
+    """Manager 复盘后追加的步骤。step_id 会由系统重新分配。"""
+    step_id: Optional[int] = None
+    worker_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    task: str = Field(..., min_length=1)
+    input: str = ""
+    artifact_type: Literal[
+        "none",
+        "document",
+        "html",
+        "code",
+        "analysis",
+        "test_report",
+        "data",
+    ] = "none"
+    output: Optional[str] = None
+    depends_on: List[int] = Field(default_factory=list)
+
+
+class TaskReviewDecisionModel(BaseModel):
+    """Manager 对当前执行结果的复盘决策。"""
+    is_complete: bool
+    reason: str = ""
+    quality_issues: List[str] = Field(default_factory=list)
+    missing_requirements: List[str] = Field(default_factory=list)
+    new_steps: List[TaskReviewStepModel] = Field(default_factory=list)
+
+
 class ManagerAgent(AgentBase):
     """
     管理者智能体 - 任务协调中心
@@ -90,6 +125,7 @@ class ManagerAgent(AgentBase):
         self.personality = personality
         self.skill_names = skill_names or []
         self.toolkit = toolkit or get_toolkit()
+        self._file_workspace = getattr(self.toolkit, "_agent_file_workspace", None)
         self._event_callback = event_callback
 
         # 初始化模型
@@ -312,6 +348,12 @@ class ManagerAgent(AgentBase):
         try:
             content = self._extract_text_from_response(response.content)
             print(f"\n🤔 [Manager] AI规划思考:\n{content[:500]}...")
+            self._emit(
+                "manager_thinking",
+                agent_name=self.name,
+                role=self.role,
+                content=f"【Manager规划原文】\n{content}",
+            )
 
             decision = self._parse_task_plan_decision(content)
             reason = decision.reason
@@ -388,18 +430,73 @@ class ManagerAgent(AgentBase):
                 "artifact_type": step.artifact_type,
                 "output": step.output.strip() if step.output else None,
                 "depends_on": depends_on,
+                "status": "pending",
+                "attempt": 1,
+                "origin": "initial",
+                "review_round": 0,
             })
         return normalized
 
     async def _execute_plan(self, task_plan: TaskPlan):
-        """执行任务计划"""
+        """执行任务计划，并在必要时复盘追加补救步骤。"""
+        task_plan.status = "running"
+        review_complete = False
+
+        for review_round in range(1, MAX_REVIEW_ROUNDS + 1):
+            print(f"\n📋 [Manager] 执行轮次 {review_round}/{MAX_REVIEW_ROUNDS}")
+            await self._execute_current_plan_steps(task_plan)
+
+            self._emit(
+                "manager_reviewing",
+                agent_name=self.name,
+                role=self.role,
+                content="正在评估团队成员的执行结果...",
+            )
+
+            review = await self._review_task_progress(task_plan, review_round)
+            print(f"   🔎 [Manager] 复盘结论: complete={review.is_complete}, reason={review.reason[:100]}")
+
+            if review.is_complete:
+                review_complete = True
+                break
+
+            if review_round >= MAX_REVIEW_ROUNDS:
+                print("   ⚠️ [Manager] 已达到最大复盘轮次，不再追加任务")
+                break
+
+            added_steps = self._append_review_steps(task_plan, review, review_round)
+            if not added_steps:
+                print("   ⚠️ [Manager] 复盘未产生可追加步骤，结束执行")
+                break
+
+            self._emit(
+                "plan_updated",
+                agent_name=self.name,
+                added_steps=[
+                    {"agent_name": s.get("agent_name"), "task": s.get("task", "")}
+                    for s in added_steps
+                ],
+            )
+
+        if review_complete:
+            task_plan.status = "completed"
+            print(f"\n✅ [Manager] 复盘确认任务可交付")
+        elif any((r.get("status") in {"failed", "skipped"}) for r in task_plan.results.values()):
+            task_plan.status = "failed"
+            print(f"\n⚠️ [Manager] 任务仍存在失败或跳过步骤")
+        else:
+            task_plan.status = "completed"
+            print(f"\n✅ [Manager] 所有步骤执行完成")
+
+    async def _execute_current_plan_steps(self, task_plan: TaskPlan):
+        """执行当前计划中仍处于 pending 的步骤。"""
         task_plan.status = "running"
 
         # 按依赖顺序执行任务。只有真正成功的步骤才会解锁下游依赖。
-        succeeded_steps = set()
-        failed_steps = set()
-        skipped_steps = set()
-        print(f"\n📋 [Manager] 开始执行{len(task_plan.steps)}个步骤...")
+        succeeded_steps = self._step_ids_by_status(task_plan, "completed")
+        failed_steps = self._step_ids_by_status(task_plan, "failed")
+        skipped_steps = self._step_ids_by_status(task_plan, "skipped")
+        print(f"\n📋 [Manager] 开始执行当前计划，共{len(task_plan.steps)}个步骤...")
 
         while len(succeeded_steps) + len(failed_steps) + len(skipped_steps) < len(task_plan.steps):
             terminal_steps = succeeded_steps | failed_steps | skipped_steps
@@ -420,6 +517,7 @@ class ManagerAgent(AgentBase):
                         "agent": step.get("agent_name"),
                         "error": f"上游步骤失败或跳过，无法执行依赖: {blocked_deps}",
                     }
+                    step["status"] = "skipped"
                     print(f"   ⏭️ 步骤跳过: {step.get('agent_name')} - 依赖失败 {blocked_deps}")
 
             terminal_steps = succeeded_steps | failed_steps | skipped_steps
@@ -444,9 +542,12 @@ class ManagerAgent(AgentBase):
                             "agent": step.get("agent_name"),
                             "error": "依赖无法满足或存在循环依赖",
                         }
+                        step["status"] = "failed"
                 break
 
             print(f"\n   🔄 本轮可执行步骤: {[s.get('agent_name') for s in ready_steps]}")
+            for step in ready_steps:
+                step["status"] = "running"
 
             # 并行执行准备好的任务
             results = await asyncio.gather(
@@ -472,18 +573,208 @@ class ManagerAgent(AgentBase):
 
                 task_plan.results[step_id] = result
                 if result.get("status") == "completed":
+                    step["status"] = "completed"
                     succeeded_steps.add(step_id)
                     print(f"   ✅ 步骤完成: {step.get('agent_name')} - {step.get('task', '')[:30]}...")
                 else:
+                    step["status"] = result.get("status") or "failed"
                     failed_steps.add(step_id)
                     print(f"   ❌ 步骤失败: {step.get('agent_name')} - {result.get('error', '未知错误')}")
 
         if failed_steps or skipped_steps:
-            task_plan.status = "failed"
             print(f"\n⚠️ [Manager] 计划执行结束，成功={len(succeeded_steps)}，失败={len(failed_steps)}，跳过={len(skipped_steps)}")
         else:
-            task_plan.status = "completed"
             print(f"\n✅ [Manager] 所有步骤执行完成")
+
+    def _step_ids_by_status(self, task_plan: TaskPlan, status: str) -> set:
+        """按结果状态收集步骤 ID。"""
+        return {
+            step["step_id"]
+            for step in task_plan.steps
+            if (task_plan.results.get(step["step_id"], {}).get("status") or step.get("status")) == status
+        }
+
+    def _build_review_context(self, task_plan: TaskPlan) -> str:
+        """构建给 Manager 复盘用的紧凑执行上下文。"""
+        lines = []
+        for step in task_plan.steps:
+            step_id = step["step_id"]
+            result = task_plan.results.get(step_id, {})
+            status = result.get("status") or step.get("status", "pending")
+            summary = result.get("summary") or self._extract_summary(result.get("result", ""))
+            error = result.get("error", "")
+            referenced_files = result.get("referenced_files", [])
+            lines.append(
+                "\n".join([
+                    f"步骤 {step_id}",
+                    f"- worker: {step.get('agent_name')}",
+                    f"- status: {status}",
+                    f"- task: {step.get('task', '')}",
+                    f"- input: {step.get('input', '')[:300]}",
+                    f"- artifact_type: {step.get('artifact_type', 'none')}",
+                    f"- output: {step.get('output') or ''}",
+                    f"- depends_on: {step.get('depends_on', [])}",
+                    f"- summary: {summary[:500] if summary else ''}",
+                    f"- error: {error[:300] if error else ''}",
+                    f"- referenced_files: {referenced_files}",
+                ])
+            )
+        return "\n\n".join(lines)
+
+    async def _review_task_progress(self, task_plan: TaskPlan, review_round: int) -> TaskReviewDecisionModel:
+        """让 Manager 评估当前执行结果，必要时追加补救步骤。"""
+        review_prompt = f"""你是{self.name}，{self.role}。
+
+你正在复盘团队成员的执行结果。请判断当前结果是否已经满足用户原始请求。
+
+原始用户请求：
+{task_plan.description}
+
+团队成员能力：
+{self.get_worker_capabilities()}
+
+当前计划与执行结果：
+{self._build_review_context(task_plan)}
+
+复盘规则：
+1. 只有当结果明显无法满足原始请求、必要产物缺失、步骤失败或质量问题影响交付时，才追加步骤。
+2. 不要为了可选优化、润色或主观偏好追加步骤。
+3. 追加步骤只能用于补救、重试或补齐缺失产物，不要删除或重排旧步骤。
+4. 如果当前结果已经可交付，必须返回 is_complete=true 且 new_steps=[]。
+5. 如果追加步骤是为了修复失败步骤，不要依赖失败步骤；可在 input 中说明失败原因，并只依赖已经成功的上游步骤。
+6. 每轮最多追加 {MAX_NEW_STEPS_PER_REVIEW} 个步骤，总步骤数最多 {MAX_TOTAL_STEPS} 个。
+7. output 是给文件工具使用的逻辑保存目标，不要解释真实磁盘目录或用户目录映射。
+
+请只返回 JSON：
+{{
+    "is_complete": true/false,
+    "reason": "判断原因",
+    "quality_issues": ["可选，影响交付的问题"],
+    "missing_requirements": ["可选，未满足的用户要求"],
+    "new_steps": [
+        {{
+            "worker_id": "必须从团队成员列表中选择 worker_id",
+            "agent_name": "负责该步骤的Agent名称，仅用于展示",
+            "task": "具体补救任务",
+            "input": "需要传递给Agent的输入，包含失败原因或缺失内容",
+            "artifact_type": "none/document/html/code/analysis/test_report/data",
+            "output": "可选，只有需要持久化产物时填写",
+            "depends_on": []
+        }}
+    ]
+}}
+"""
+        try:
+            review_msg = Msg(name="user", content=review_prompt, role="user")
+            prompt = await self.formatter.format([review_msg])
+            response = await self.model(prompt)
+            content = self._extract_text_from_response(response.content)
+            print(f"\n🔎 [Manager] 复盘思考:\n{content[:500]}...")
+            json_str = self._extract_json(content)
+            review_data = json.loads(json_str)
+            return TaskReviewDecisionModel.model_validate(review_data)
+        except Exception as e:
+            print(f"⚠️ [Manager] 复盘失败: {e}")
+            has_problem = any(
+                (result.get("status") in {"failed", "skipped"})
+                for result in task_plan.results.values()
+            )
+            return TaskReviewDecisionModel(
+                is_complete=not has_problem,
+                reason=f"复盘失败，按当前执行状态兜底判断: {e}",
+                new_steps=[],
+            )
+
+    def _append_review_steps(
+        self,
+        task_plan: TaskPlan,
+        review: TaskReviewDecisionModel,
+        review_round: int,
+    ) -> List[Dict[str, Any]]:
+        """把复盘决策中的补救步骤追加到当前计划。"""
+        if not review.new_steps:
+            return []
+
+        remaining_slots = MAX_TOTAL_STEPS - len(task_plan.steps)
+        if remaining_slots <= 0:
+            print("   ⚠️ [Manager] 已达到最大步骤数，无法追加新任务")
+            return []
+
+        completed_step_ids = self._step_ids_by_status(task_plan, "completed")
+        next_step_id = max((step["step_id"] for step in task_plan.steps), default=0) + 1
+        added_steps: List[Dict[str, Any]] = []
+
+        for raw_step in review.new_steps[: min(MAX_NEW_STEPS_PER_REVIEW, remaining_slots)]:
+            worker_id = raw_step.worker_id
+            worker = self._workers.get(worker_id or "") if worker_id else None
+            if not worker and raw_step.agent_name:
+                worker = self._workers_by_name.get(raw_step.agent_name)
+                worker_id = worker.worker_id if worker else None
+            if not worker or not worker_id:
+                print(f"   ⚠️ [Manager] 跳过复盘追加步骤，worker 不存在: {raw_step.worker_id or raw_step.agent_name}")
+                continue
+
+            depends_on = [dep for dep in raw_step.depends_on if dep in completed_step_ids]
+            step = {
+                "step_id": next_step_id,
+                "worker_id": worker_id,
+                "agent_name": worker.name,
+                "task": raw_step.task.strip(),
+                "input": raw_step.input.strip(),
+                "artifact_type": raw_step.artifact_type,
+                "output": raw_step.output.strip() if raw_step.output else None,
+                "depends_on": depends_on,
+                "status": "pending",
+                "attempt": 1,
+                "origin": "review",
+                "review_round": review_round,
+            }
+            task_plan.steps.append(step)
+            added_steps.append(step)
+            print(f"   ➕ [Manager] 追加步骤 {next_step_id}: {worker.name} -> {step['task'][:50]}...")
+            next_step_id += 1
+
+        return added_steps
+
+    def _extract_tool_response_text(self, response: Any) -> str:
+        """从工具响应中提取文本。"""
+        content = getattr(response, "content", response)
+        if isinstance(content, list):
+            texts = []
+            for item in content:
+                if isinstance(item, dict):
+                    texts.append(str(item.get("text", item)))
+                else:
+                    texts.append(str(item))
+            return "\n".join(texts)
+        return str(content)
+
+    async def _validate_step_output(self, step: Dict[str, Any]) -> Optional[str]:
+        """校验声明的 output 是否已经可读取。"""
+        output_file = (step.get("output") or "").strip()
+        if not output_file:
+            return None
+
+        artifact_type = step.get("artifact_type") or "none"
+        if artifact_type == "html" and not output_file.lower().endswith(".html"):
+            return f"HTML 产物应保存为 .html 文件: {output_file}"
+
+        read_tool = self.toolkit.tools.get("read_file") if self.toolkit else None
+        if not read_tool:
+            print(f"      ⚠️ 无法校验产物 {output_file}: read_file 工具不可用")
+            return None
+
+        try:
+            read_func = read_tool.original_func
+            with workspace_context(self._file_workspace):
+                response = await read_func(file_path=output_file, start_line=1, end_line=1)
+            text = self._extract_tool_response_text(response)
+            if "错误:" in text or "不存在" in text or "不是文件" in text:
+                return f"声明的产物文件未生成或不可读: {output_file}；{text[:180]}"
+        except Exception as e:
+            return f"声明的产物文件无法校验: {output_file}；{e}"
+
+        return None
 
     def _extract_summary(self, content) -> str:
         """从 Agent 响应内容中提取纯文本摘要"""
@@ -632,7 +923,10 @@ class ManagerAgent(AgentBase):
         # 如果当前步骤在计划中约定了产出文件路径，明确告知 Worker
         output_file = step.get("output")
         if output_file:
-            task_content += f"\n\n【产出要求】请将本步骤的主要产出保存到: {output_file}"
+            task_content += (
+                f"\n\n【产出要求】必须调用 write_file 将本步骤的主要产出保存到: {output_file}"
+                f"\n仅在回复中描述内容不算完成；保存成功后请在回复中说明该文件引用。"
+            )
 
         task_msg = Msg(
             name=self.name,
@@ -657,6 +951,28 @@ class ManagerAgent(AgentBase):
 
             # 从摘要中提取文件路径，供下游步骤引用
             referenced_files = self._extract_file_paths(result_summary)
+            output_validation_error = await self._validate_step_output(step)
+            if output_validation_error:
+                print(f"      ❌ {agent_name} 产物校验失败: {output_validation_error}")
+                result = {
+                    "status": "failed",
+                    "agent": agent_name,
+                    "error": output_validation_error,
+                    "summary": result_summary,
+                    "result": response.content,
+                    "referenced_files": referenced_files,
+                }
+                task_plan.results[step["step_id"]] = result
+                self._emit("worker_done",
+                    agent_name=agent_name,
+                    result=output_validation_error,
+                    task=task_description,
+                    failed=True
+                )
+                return result
+
+            if output_file and output_file not in referenced_files:
+                referenced_files.append(output_file)
 
             result = {
                 "status": "completed",

@@ -175,6 +175,7 @@ class ToolRegistry:
 
     def get_toolkit(self) -> Toolkit:
         """获取全局Toolkit实例"""
+        setattr(self._toolkit, "_agent_file_workspace", self._workspace)
         return self._toolkit
 
     def list_tools(self) -> List[str]:

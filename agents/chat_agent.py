@@ -12,6 +12,7 @@ from agentscope.formatter import OpenAIChatFormatter
 from agentscope.tool import Toolkit
 
 from tools import get_toolkit
+from tools.builtin.file_io import workspace_context
 
 
 class _MediaFilteringMemory:
@@ -154,6 +155,7 @@ class ChatAgent(AgentBase):
 
         # 用户级 Toolkit 优先；未传入时回退到全局 Toolkit，保持兼容。
         toolkit = toolkit or get_toolkit()
+        self._file_workspace = getattr(toolkit, "_agent_file_workspace", None)
 
         # 创建 ReAct 智能体，使用角色化的 system prompt
         sys_prompt = self._create_system_prompt()
@@ -257,7 +259,8 @@ class ChatAgent(AgentBase):
         Returns:
             Agent 的回复消息
         """
-        return await self.react_agent.reply(msg)
+        with workspace_context(self._file_workspace):
+            return await self.react_agent.reply(msg)
 
 #
 # def create_default_agents(llm_config: Dict[str, Any]) -> List[ChatAgent]:

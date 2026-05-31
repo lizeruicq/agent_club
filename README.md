@@ -1,385 +1,286 @@
-# 🤖 RPG Multi-Agent System
+# RPG Multi-Agent System
 
-> ⚠️ **早期开发阶段** | 🚧 **持续开发中** | 📝 **API 可能变动**
+一个带 RPG 像素场景的多 Agent 协作系统。后端基于 FastAPI 和 AgentScope，前端基于 React、Vite 和 Phaser。当前系统支持普通多 Agent 对话、Manager-Worker 任务分派、会话级产物隔离、HTML 预览和作品广场发布。
 
-一个基于 **RPG 像素风格** 的多 Agent 协作对话系统，支持 Manager-Worker 架构与作品发布平台
+> 当前项目仍处于开发阶段，部分 API 和内部结构可能继续调整。
 
-![Status](https://img.shields.io/badge/status-alpha-orange)
-![Python](https://img.shields.io/badge/python-3.10+-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.136+-green)
-![React](https://img.shields.io/badge/React-18+-61dafb)
+## 当前能力
+![img_1.png](img_1.png)
+### RPG 前端
 
-![img_2.png](img_2.png)
-![img_3.png](img_3.png)
----
+- React UI + Phaser 2D 场景。
+- 支持办公室、图书馆等 Tiled 地图。
+- 支持角色帧动画配置，当前公共角色资源包括 `boy`、`girl`、`mafia1`、`mafia2`、`mafia3`。
+- 浮动聊天窗口展示用户消息、Agent 输出、Manager 过程信息和错误信息。
+- 支持 Agent、Provider、Tool、Skill、Scene、HTML 预览、作品广场等页面。
 
-## ✨ 核心特性
+### 多 Agent 模式
 
-### 🎮 RPG 像素风界面
-- **2D 游戏场景**：基于 Phaser.js 的星露谷物语风格，支持多场景切换（图书馆 / 办公室）
-- **Agent 形象**：Manager 与 Worker 均使用帧动画精灵图
-  - 四方向行走/待机动画（如 girl、manager）
-  - 单方向帧动画自动水平翻转兼容（如 mafia1）
-- **按场景角色缩放**：不同场景可独立配置 `characterScales`，角色自动适配 tile 比例
-- **动画状态**：待机 / 行走 / 思考 / 说话
-- **对话气泡**：游戏风格的对话展示
-- **点击移动**：选中角色后点击地图空地可移动，自动避障
-- **历史会话**：支持保存、切换、删除历史对话，每次切换自动恢复当时的 Agent / Manager / 场景配置
+系统目前有两种聊天执行模式：
 
-### 🧠 多 Agent 架构
-- **Manager-Worker 模式**：智能任务分派与结果整合
-- **MsgHub 模式**：传统多 Agent 广播对话
-- **独立模型配置**：每个 Agent 可配置不同的 LLM Provider
+- **MsgHub 模式**：多个普通 `ChatAgent` 参与对话。
+- **Manager-Worker 模式**：`ManagerAgent` 负责任务规划、分派、复盘和结果整合，`WorkerAgent` 负责具体执行。
 
-### 🏪 作品发布平台（新增）
-- **发布功能**：将 Agent 产出的 HTML 作品一键发布到平台广场
-- **作品广场**：所有用户可浏览、预览、使用已发布的作品
-- **沙箱渲染**：作品在 iframe 沙箱中安全运行
-- **搜索与排序**：支持关键词搜索、按最新/最热排序
-- **标签分类**：支持自定义标签，便于作品分类发现
+Manager-Worker 当前实际流程：
 
-### 🔧 支持的模型提供商
-| 提供商 | 状态 | 备注 |
-|--------|------|------|
-| DashScope (阿里云) | ✅ 已支持 | qwen 系列 |
-| OpenAI | ✅ 已支持 | GPT 系列 |
-| Anthropic | ✅ 已支持 | Claude 系列 |
-| Kimi (Moonshot) | ✅ 已支持 | kimi 系列 |
-| 自定义 Provider | ✅ 已支持 | 任意兼容 OpenAI API 的服务 |
+1. Manager 根据用户请求生成结构化任务计划。
+2. 每个步骤包含 `worker_id`、`task`、`input`、`artifact_type`、`output`、`depends_on` 等字段。
+3. 系统按依赖执行步骤；同一轮可执行步骤会并发执行。
+4. 只有 `completed` 的步骤会解锁下游依赖；失败步骤不会再被当作完成。
+5. 依赖失败的步骤会标记为 `skipped`。
+6. 如果步骤声明了 `output`，Manager 会尝试用当前工具工作区里的 `read_file` 校验该产物是否可读。
+7. 每轮执行后，Manager 会复盘当前结果；如未满足用户请求，可追加补救步骤。
+8. 动态复盘有硬限制：最多 3 轮、总步骤最多 10 个、每轮最多追加 3 个步骤。
+9. 最后由 Manager 整合所有 Worker 结果返回给用户。
 
-### 🛠️ 技能系统
-- **内置技能**：文件操作、浏览器自动化
-- **技能管理**：通过 Skill 面板启用/禁用技能
-- **可扩展**：支持自定义技能注册，自动加载 `skills/examples/` 目录下的技能文件
-- **技能绑定**：每个 Agent 可独立配置启用的技能列表
+当前 Manager 内部规划原文会通过流式事件显示到聊天框，格式以 `【Manager规划原文】` 开头。
 
-### 🧰 工具系统
-- 内置工具：文件操作、浏览器自动化、Shell 命令
-- 可扩展：支持自定义工具注册
+### 用户、会话与产物隔离
 
----
+配置和运行时的边界如下：
 
-## 🏗️ 项目架构
+- 用户级配置：Provider、Agent、Manager、Tool、Skill、场景配置。
+- 会话级运行时：Agent/Manager/Worker 实例、Agent memory、工具 workspace、场景注入状态。
+- 会话级产物：文档、HTML 预览和其他文件产物。
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    前端 (React + Phaser)                 │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  Phaser 游戏场景                                  │   │
-│  │  - ChatScene.ts (像素风办公室)                   │   │
-│  │  - Agent 角色 (Manager/Worker)                   │   │
-│  │  - 动画系统 (idle/thinking/speaking)             │   │
-│  └─────────────────────────────────────────────────┘   │
-│                         ↑↓                              │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  React UI 组件                                   │   │
-│  │  - 侧边栏导航                                    │   │
-│  │  - 浮动聊天窗口                                  │   │
-│  │  - Agent / Provider / Skill 配置面板              │   │
-│  │  - 网页预览 & 发布                               │   │
-│  │  - 作品广场                                      │   │
-│  └─────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
-                            ↑↓ HTTP
-┌─────────────────────────────────────────────────────────┐
-│                   后端 (FastAPI)                         │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │
-│  │  Chat API   │  │ Agent API   │  │  Provider API   │ │
-│  │  /api/chat  │  │ /api/agents │  │ /api/providers  │ │
-│  └─────────────┘  └─────────────┘  └─────────────────┘ │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │
-│  │ManagerAgent │  │ WorkerAgent │  │   ChatAgent     │ │
-│  │  (任务协调)  │  │  (任务执行)  │  │  (普通对话)      │ │
-│  └─────────────┘  └─────────────┘  └─────────────────┘ │
-│  ┌─────────────────────────────────────────────────────┐│
-│  │          平台子应用 (/platform)                      ││
-│  │  - 作品发布 API                                     ││
-│  │  - 广场列表 API                                     ││
-│  │  - 作品渲染服务                                     ││
-│  └─────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────┘
-                            ↑↓
-┌─────────────────────────────────────────────────────────┐
-│              基础设施层                                   │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │
-│  │   Qdrant    │  │   SQLite    │  │    工具系统      │ │
-│  │  向量数据库  │  │  平台数据库  │  │  (内置+扩展)     │ │
-│  └─────────────┘  └─────────────┘  └─────────────────┘ │
-└─────────────────────────────────────────────────────────┘
+运行时 session 当前按 `(user_id, conversation_id)` 管理。同一用户打开不同会话时，会获得不同的 Agent runtime。单个会话内部通过 `execution_lock` 串行处理聊天请求，避免同一会话内的并发请求同时修改 Agent 状态。
+
+文件产物的实际存储位置为：
+
+```text
+output/users/{user_id}/conversations/{conversation_id}/
+├── doc/       # 文档类产物
+├── preview/   # HTML 预览产物
+└── ...        # 其他 output 产物
 ```
 
----
+Agent 看到的是逻辑路径，例如：
 
-## 🚀 快速开始
+```text
+output/doc/prd.md
+output/preview/index.html
+output/data/result.json
+```
 
-### 环境要求
-- Python 3.10+
-- Node.js 18+
-- Qdrant (向量数据库，可选 Docker)
+工具层会把这些逻辑路径映射到当前用户、当前会话的实际产物目录。
 
-### 1. 安装依赖
+### HTML 预览与作品广场
+
+- `/api/artifacts` 按当前 `conversation_id` 列出当前会话产物。
+- `/preview/{filepath}` 按当前 `conversation_id` 渲染当前会话 HTML 文件。
+- 发布作品时，如果使用 `source_file`，必须提供 `conversation_id`。
+- 广场发布会把当前会话 preview 文件复制到 `plaza_platform/works/`，发布后的作品不依赖原会话产物继续存在。
+- 广场列表和详情支持可选鉴权；前端广场 API 会携带 token，因此后端可以正确返回 `is_mine`。
+- 删除作品需要作者本人鉴权。
+
+## 启动方式
+
+### 安装依赖
 
 ```bash
-# 后端依赖
+# 后端
 pip install -r requirements.txt
 
-# 前端依赖
+# 前端
 cd rpg-frontend
 npm install
 cd ..
 ```
 
-### 2. 配置环境变量
+### 开发模式
 
 ```bash
-cp .env.example .env
-# 编辑 .env 文件，配置 API 密钥
-```
-
-### 3. 启动服务
-
-**开发模式**（推荐）：
-```bash
-# 终端 1: 启动后端（开发模式，带热重载）
+# 终端 1：后端 API
 python main.py --dev
 
-# 终端 2: 启动前端（独立开发服务器）
+# 终端 2：前端 Vite
 cd rpg-frontend
 npm run dev
 ```
 
-**生产模式**：
+访问：
+
+- 前端：http://localhost:5173
+- API 文档：http://localhost:8000/docs
+
+### 生产模式
+
 ```bash
-# 单命令启动（自动构建前端）
 python main.py
 ```
 
-### 4. 访问应用
+生产模式由后端服务已构建的前端静态文件，访问：
 
-- 前端界面：http://localhost:5173 （开发模式）或 http://localhost:8000 （生产模式）
-- API 文档：http://localhost:8000/docs
-
----
-
-## 📁 项目结构
-
+```text
+http://localhost:8000
 ```
+
+## 项目结构
+
+```text
 .
-├── agents/                 # Agent 实现
-│   ├── manager_agent.py   # Manager 智能体（任务协调）
-│   ├── chat_agent.py      # 基础对话智能体
+├── agents/
+│   ├── chat_agent.py          # 普通对话 Agent，内部使用 ReActAgent
+│   ├── manager_agent.py       # Manager-Worker 规划、调度、复盘和整合
 │   └── __init__.py
-├── api/                   # FastAPI 接口
-│   ├── api_server.py      # 主服务入口
-│   ├── agents_api.py      # Agent 配置接口
-│   ├── providers_api.py   # Provider 配置接口
-│   ├── html_preview_api.py # HTML 预览接口
-│   ├── conversations_api.py # 历史会话接口
-│   ├── game_config_api.py # 游戏场景配置接口
-│   ├── manager_api.py     # Manager 配置接口
-│   ├── skills_api.py      # 技能管理接口
-│   ├── tools_api.py       # 工具管理接口
-│   └── session_manager.py # 会话管理器
-├── auth/                  # 用户认证
-│   ├── dependencies.py    # Token 校验
-│   ├── user_data.py       # 用户目录与数据服务
-│   └── user_managers.py   # 用户级管理器工厂
-├── config/                # 配置管理
-│   ├── agents_config.py       # Agent 配置
-│   ├── manager_config.py      # Manager 配置
-│   ├── conversations_manager.py # 历史会话管理器
+├── api/
+│   ├── api_server.py          # FastAPI 主应用、聊天流式接口、路由挂载
+│   ├── session_manager.py     # user_id + conversation_id 维度的运行时 session
+│   ├── conversations_api.py   # 历史会话保存、恢复、删除
+│   ├── html_preview_api.py    # 会话级 artifacts、HTML 保存、预览、删除
+│   ├── agents_api.py          # Agent 配置
+│   ├── providers_api.py       # Provider 配置
+│   ├── manager_api.py         # Manager 配置
+│   ├── tools_api.py           # Tool 开关配置
+│   ├── skills_api.py          # Skill 配置
+│   ├── game_config_api.py     # 场景配置
 │   └── ...
-├── providers/             # LLM 提供商管理
-│   ├── provider_manager.py
-│   ├── dashscope_provider.py
-│   ├── anthropic_provider.py
+├── auth/
+│   ├── router.py              # /api/auth 登录注册相关接口
+│   ├── dependencies.py        # 当前用户鉴权依赖
+│   ├── user_data.py           # 用户目录、会话产物目录
+│   └── user_managers.py       # 用户级配置管理器和工具注册器工厂
+├── config/
+│   ├── agents_config.py
+│   ├── manager_config.py
+│   ├── conversations_manager.py
 │   └── ...
-├── plaza_platform/        # 作品发布平台（新增）
-│   ├── server.py          # 平台 FastAPI 子应用
-│   ├── models.py          # 数据模型 (Work)
-│   ├── database.py        # SQLite + SQLAlchemy
-│   ├── storage.py         # 文件存储抽象层
-│   ├── works/             # 已发布作品文件存储
-│   └── platform.db        # 平台数据库
-├── tools/                 # 工具系统
-│   ├── builtin/           # 内置工具
-│   └── extensions/        # 扩展工具
-├── skills/                # 技能系统
-│   ├── skill_registry.py  # 技能注册器
-│   └── examples/          # 技能定义 (Markdown)
-├── rag_knowledge_base/    # RAG 知识库
-├── rpg-frontend/          # 前端项目
+├── tools/
+│   ├── __init__.py            # ToolRegistry，按用户/会话绑定 workspace
+│   └── builtin/               # file_io、file_search、shell、browser 等内置工具
+├── skills/
+│   ├── skill_registry.py
+│   └── examples/              # Markdown 技能定义示例
+├── providers/
+│   └── ...                    # Provider 管理与模型配置
+├── plaza_platform/
+│   ├── server.py              # /platform 子应用
+│   ├── models.py              # Work 模型
+│   ├── database.py            # SQLite 初始化与迁移
+│   ├── storage.py             # 发布作品文件存储
+│   └── works/                 # 已发布作品 HTML 文件
+├── rpg-frontend/
 │   ├── src/
-│   │   ├── game/          # Phaser 游戏场景
-│   │   │   └── ChatScene.ts
-│   │   ├── components/    # React 组件
-│   │   ├── pages/         # 页面组件
-│   │   │   ├── AgentConfigPage.tsx
-│   │   │   ├── ProviderConfigPage.tsx
-│   │   │   ├── SceneSelectPage.tsx  # 场景切换
-│   │   │   ├── HtmlPreviewPage.tsx
-│   │   │   ├── PlazaPage.tsx        # 作品广场
-│   │   │   └── ...
-│   │   └── api/           # API 客户端
-│   ├── public/
-│   │   └── assets/
-│   │       ├── characters/  # 角色帧动画精灵图
-│   │       ├── maps/        # Tiled 地图资源
-│   │       └── game-config.json # 公共场景/角色/动画配置
-│   └── package.json
-├── data/                  # 用户数据存储
-│   └── users/
-│       └── {user_id}/
-│           ├── agents_config.json   # 用户 Agent 配置
-│           ├── manager_config.json  # 用户 Manager 配置
-│           ├── game_config.json     # 用户场景配置（currentScene、description）
-│           ├── conversations/       # 历史会话快照
-│           └── ...
-├── output/                # Agent 产出文件
-│   ├── doc/               # 文档类产出
-│   └── preview/           # HTML 预览文件
-├── main.py               # 主入口
-└── requirements.txt      # Python 依赖
+│   │   ├── App.tsx            # 主界面、聊天流式事件处理
+│   │   ├── api/index.ts       # 前端 API 客户端
+│   │   ├── game/ChatScene.ts  # Phaser 场景
+│   │   └── pages/             # 配置页、预览页、广场页等
+│   └── public/assets/
+│       ├── characters/        # 角色精灵图
+│       ├── maps/              # Tiled 地图资源
+│       └── game-config.json   # 公共角色、动画和场景配置
+├── data/users/                # 用户配置和历史会话数据
+├── output/users/              # 用户、会话级 Agent 产物
+├── main.py                    # 后端启动入口
+└── requirements.txt
 ```
 
----
+## 主要 API
 
-## ⚙️ 配置说明
+### 聊天与运行时
 
-### 创建 Agent
-
-1. 进入 **"Provider 配置"** 页面，添加 LLM 提供商（如 DashScope、OpenAI）
-2. 进入 **"Agent 配置"** 页面，创建 Worker Agent
-3. 可选：在 **"Manager 配置"** 中启用 Manager 模式
-
-### Manager-Worker 模式
-
-启用后：
-- Manager 分析用户请求，拆解为子任务
-- 分派给合适的 Worker 执行
-- 收集结果并整合回复
-
-不启用时：
-- 使用传统 MsgHub 模式
-- 所有 Agent 同时收到消息并独立回复
-
-### 作品发布平台
-
-1. Agent 在对话中产出 HTML 文件，自动保存到 `output/preview/` 目录
-2. 进入 **"网页预览"** 页面，选中文件后点击 **"发布到广场"**
-3. 填写作品标题、简介、标签等信息后发布
-4. 所有用户均可在 **"作品广场"** 浏览和使用已发布的作品
-
----
-
-## 🔌 API 端点
-
-### Agent 系统 API
-
-| 端点 | 方法 | 描述 |
-|------|------|------|
-| `/api/chat` | POST | 发送消息，获取 Agent 响应 |
-| `/api/chat/stream` | POST | 流式响应（SSE） |
-| `/api/agents` | GET | 获取所有 Agent 列表 |
-| `/api/agents-config` | GET/POST | Agent 配置 CRUD |
-| `/api/providers` | GET/POST | Provider 配置 CRUD |
-| `/api/tools` | GET/PUT | 工具管理 |
-| `/api/skills` | GET/PUT | 技能管理 |
-| `/api/manager` | GET/PUT | Manager 配置 |
-| `/api/game-config` | GET/PUT | 游戏场景配置 |
-| `/api/html-preview` | GET/POST/DELETE | HTML 预览文件管理 |
-| `/api/conversations` | GET | 列出历史会话列表 |
-| `/api/conversations/{id}` | GET | 获取历史会话详情 |
-| `/api/conversations` | POST | 保存当前会话为历史会话 |
-| `/api/conversations/{id}` | PUT | 更新已有历史会话 |
-| `/api/conversations/{id}` | DELETE | 删除历史会话 |
-| `/api/conversations/{id}/restore` | POST | 恢复历史会话（视图快照） |
-| `/api/system/reinitialize` | POST | 重新初始化系统 |
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/chat` | POST | 非流式聊天 |
+| `/api/chat/stream` | POST | SSE 流式聊天，需要携带 `conversation_id` 才能绑定会话工作区 |
+| `/api/system/reinitialize` | POST | 重建当前用户 runtime，可传 `conversation_id` |
 | `/api/health` | GET | 健康检查 |
 
-### 平台广场 API
+### 配置
 
-| 端点 | 方法 | 描述 |
-|------|------|------|
-| `/platform/api/publish` | POST | 发布作品到广场 |
-| `/platform/api/works` | GET | 获取广场作品列表（分页、排序、搜索） |
-| `/platform/api/works/{id}` | GET | 获取作品详情 |
-| `/platform/api/works/{id}/render` | GET | 渲染作品 HTML（iframe 加载） |
-| `/platform/api/works/{id}` | DELETE | 删除作品 |
-| `/platform/api/health` | GET | 平台健康检查 |
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/agents-config` | GET/POST/PUT/DELETE | Agent 配置 |
+| `/api/providers` | GET/POST/PUT/DELETE | Provider 配置 |
+| `/api/manager` | GET/PUT | Manager 配置 |
+| `/api/tools` | GET/PUT | 工具开关 |
+| `/api/skills` | GET/PUT | 技能配置 |
+| `/api/game-config` | GET/PUT | 场景配置 |
 
-#### 发布作品示例
+### 会话与产物
 
-```bash
-# 从本地预览文件发布
-curl -X POST http://localhost:8000/platform/api/publish \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "我的作品",
-    "description": "一个很酷的交互页面",
-    "author": "用户名",
-    "tags": "游戏,交互",
-    "source_file": "index.html"
-  }'
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/conversations` | GET/POST | 历史会话列表、保存当前会话 |
+| `/api/conversations/{id}` | GET/PUT/DELETE | 会话详情、更新、删除 |
+| `/api/conversations/{id}/restore` | POST | 恢复历史会话 |
+| `/api/artifacts` | GET | 按 `conversation_id` 列出当前会话产物 |
+| `/api/artifacts/{storage}/{filepath}/content` | GET | 读取当前会话产物内容 |
+| `/api/artifacts/{storage}/{filepath}` | DELETE | 删除当前会话产物 |
+| `/api/html-preview` | GET/POST | HTML 预览文件列表、保存 |
+| `/api/html-preview/{filepath}/content` | GET | 读取 HTML 预览内容 |
+| `/api/html-preview/{filepath}` | DELETE | 删除 HTML 预览文件 |
+| `/preview/{filepath}` | GET | iframe 预览当前会话 HTML |
 
-# 直接传 HTML 内容发布
-curl -X POST http://localhost:8000/platform/api/publish \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Hello World",
-    "content": "<!DOCTYPE html><html><body><h1>Hello!</h1></body></html>"
-  }'
+### 作品广场
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/platform/api/publish` | POST | 发布作品，需登录 |
+| `/platform/api/works` | GET | 作品列表，支持分页、排序、搜索 |
+| `/platform/api/works/{id}` | GET | 作品详情 |
+| `/platform/api/works/{id}/render` | GET | 渲染作品 HTML |
+| `/platform/api/works/{id}` | DELETE | 删除本人作品 |
+| `/platform/api/my-works` | GET | 获取当前用户发布的作品 |
+
+发布当前会话 preview 文件时，请求体需要包含 `conversation_id`：
+
+```json
+{
+  "title": "我的作品",
+  "description": "一个交互页面",
+  "tags": "html,agent",
+  "source_file": "index.html",
+  "conversation_id": "conv_xxx"
+}
 ```
 
----
+## 流式聊天事件
 
-## 🐳 Docker 部署
+前端 `App.tsx` 目前按以下事件更新聊天框：
+
+| 事件类型 | 作用 |
+| --- | --- |
+| `start` / `agent_start` | 创建一条空的 assistant 消息 |
+| `chunk` | 向对应 Agent 的消息追加文本 |
+| `done` / `agent_done` | 标记该 Agent 消息流式输出结束 |
+| `all_done` | 本轮请求完成，恢复 UI 状态 |
+| `error` | 新增错误消息 |
+
+Manager-Worker 模式下，后端会把以下内部事件转换成聊天流：
+
+- `manager_thinking`：输出 Manager 规划原文。
+- `worker_start`：创建 Worker 消息。
+- `worker_done`：输出 Worker 结果并结束 Worker 消息。
+- `manager_reviewing`：输出 Manager 正在复盘的提示。
+- `plan_updated`：输出 Manager 追加任务的提示。
+- `manager_integrating`：创建 Manager 最终回复消息。
+
+## 当前限制
+
+- Manager 已支持复盘追加任务，但仍属于轻量实现；没有持久化 run ledger，也不支持服务重启后从中间步骤恢复。
+- Worker 之间没有直接通信，主要通过 Manager 传递摘要和文件引用。
+- 产物校验目前只做基础可读性校验，不等同于完整质量评审。
+- 用户级配置变更会清理该用户所有运行时 session，因为 Provider、Agent、Tool 等配置当前仍是用户级。
+- `rag_relate(no_use)/` 是旧 RAG 相关目录，不属于当前主链路。
+
+## 验证命令
 
 ```bash
-# 启动 Qdrant 向量数据库
-docker-compose up -d qdrant
+# 后端语法检查
+.venv/bin/python -m py_compile agents/manager_agent.py api/api_server.py api/session_manager.py
 
-# 或完整部署
-docker-compose up -d
+# 前端构建
+cd rpg-frontend
+npm run build
 ```
 
-详细 Docker 配置参考 [DOCKER_SETUP.md](DOCKER_SETUP.md)
+## 技术栈
 
----
-
-## 🗺️ 开发路线
-
-- [x] RPG 像素风 2D 游戏场景
-- [x] 多场景切换（图书馆 / 办公室）
-- [x] 四方向 + 单方向帧动画兼容
-- [x] Manager-Worker 多 Agent 协作
-- [x] 多 LLM Provider 支持
-- [x] 流式响应输出
-- [x] 技能系统
-- [x] 工具系统
-- [x] HTML 预览与作品发布平台
-- [x] 用户认证系统
-- [x] 历史会话保存与恢复
-- [ ] 作品点赞与评论
-- [ ] 对象存储 & CDN 加速
-- [ ] 更多游戏场景
-
----
-
-## 📄 许可证
-
-MIT License
-
----
-
-## 🙏 致谢
-
-- [AgentScope](https://github.com/modelscope/agentscope) - 多 Agent 框架
-- [Phaser](https://phaser.io/) - 2D 游戏引擎
-- [FastAPI](https://fastapi.tiangolo.com/) - 现代 Python Web 框架
-- [React](https://react.dev/) - UI 框架
-- [SQLAlchemy](https://www.sqlalchemy.org/) - Python ORM
-
----
-
-> 🎮 **提示**：这是一个实验性项目，旨在探索多 Agent 协作的可视化交互方式。欢迎在 [Issues](../../issues) 中分享你的想法和建议！
+- FastAPI
+- AgentScope
+- React 18
+- Vite
+- TypeScript
+- Phaser 3
+- SQLAlchemy / SQLite
