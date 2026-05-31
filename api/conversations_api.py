@@ -171,6 +171,7 @@ async def delete_conversation(conv_id: str, user: dict = Depends(get_current_use
     conv_output = _conversation_output_path(user_id, conv_id)
     if os.path.isdir(conv_output):
         shutil.rmtree(conv_output, ignore_errors=True)
+    session_manager.remove_session(user_id, conv_id)
     return {"success": True}
 
 

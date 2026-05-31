@@ -41,7 +41,7 @@ GAME_CONFIG_PATH = os.path.join(
     "rpg-frontend", "public", "assets", "game-config.json"
 )
 
-# ============== Per-user Session 管理 ==============
+# ============== Per-conversation Session 管理 ==============
 from api.session_manager import session_manager, UserSession
 from auth.user_data import get_user_data
 
@@ -155,7 +155,7 @@ def build_frontend():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    print("🚀 多 Agent 系统就绪（per-user session 模式，按需初始化）")
+    print("🚀 多 Agent 系统就绪（per-conversation session 模式，按需初始化）")
 
     # 仅在非开发模式下构建前端
     if BUILD_FRONTEND:
@@ -237,12 +237,7 @@ async def _get_user_session(request: Request, conversation_id: Optional[str] = N
 
     user = await get_current_user(request)
     user_id = user["id"]
-    session = session_manager.get_session(user_id)
-
-    if not session.initialized or session.active_conversation_id != conversation_id:
-        await session_manager.init_user_session(user_id, conversation_id)
-
-    return session
+    return await session_manager.init_user_session(user_id, conversation_id)
 
 
 # ============== FastAPI 应用 ==============
@@ -379,7 +374,7 @@ async def reinitialize(request: Request, body: Optional[ReinitializeRequest] = N
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: Request, chat_request: ChatRequest):
-    """聊天接口 - 支持 Manager-Worker 和 MsgHub 两种模式（per-user session）"""
+    """聊天接口 - 支持 Manager-Worker 和 MsgHub 两种模式（per-conversation session）"""
     try:
         session = await _get_user_session(request, chat_request.conversation_id)
     except Exception:
@@ -389,10 +384,11 @@ async def chat(request: Request, chat_request: ChatRequest):
         raise HTTPException(status_code=503, detail="用户会话未初始化")
 
     try:
-        if session.use_manager_mode and session.manager:
-            return await _chat_with_manager(chat_request, session)
-        else:
-            return await _chat_with_msghub(chat_request, session)
+        async with session.execution_lock:
+            if session.use_manager_mode and session.manager:
+                return await _chat_with_manager(chat_request, session)
+            else:
+                return await _chat_with_msghub(chat_request, session)
     except HTTPException:
         raise
     except Exception as e:
@@ -432,7 +428,7 @@ async def _chat_with_manager(chat_request: ChatRequest, session: UserSession) ->
     task_details = []
     if manager._task_history:
         latest_task = manager._task_history[-1]
-        if latest_task.status == "completed":
+        if latest_task.status in {"completed", "failed"}:
             for step in latest_task.steps:
                 result = latest_task.results.get(step["step_id"], {})
                 if result.get("status") == "completed":
@@ -524,7 +520,7 @@ async def _chat_with_msghub(chat_request: ChatRequest, session: UserSession) -> 
 
 @app.post("/api/chat/stream")
 async def chat_stream(request: Request, chat_request: ChatRequest):
-    """流式聊天接口 - 使用 Server-Sent Events（per-user session）"""
+    """流式聊天接口 - 使用 Server-Sent Events（per-conversation session）"""
     try:
         session = await _get_user_session(request, chat_request.conversation_id)
     except Exception:
@@ -535,10 +531,13 @@ async def chat_stream(request: Request, chat_request: ChatRequest):
 
     async def generate_stream():
         """生成流式响应"""
+        await session.execution_lock.acquire()
+        manager_for_callback = None
         try:
             if session.use_manager_mode and session.manager:
                 # Manager-Worker 模式流式输出 - 展示中间过程
                 manager = session.manager
+                manager_for_callback = manager
                 # 注入场景描述到用户消息中
                 wrapped_message = _wrap_message_with_scene(chat_request.message, session)
                 user_msg = Msg(name="User", content=wrapped_message, role="user")
@@ -669,6 +668,10 @@ async def chat_stream(request: Request, chat_request: ChatRequest):
             error_msg = f"流式输出错误: {str(e)}"
             print(f"❌ {error_msg}")
             yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+        finally:
+            if manager_for_callback:
+                manager_for_callback._event_callback = None
+            session.execution_lock.release()
 
     return StreamingResponse(
         generate_stream(),
@@ -687,7 +690,7 @@ async def health_check():
     return {
         "status": "healthy",
         "active_sessions": session_manager.active_count,
-        "mode": "per-user-session",
+        "mode": "per-conversation-session",
     }
 
 

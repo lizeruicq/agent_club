@@ -395,38 +395,95 @@ class ManagerAgent(AgentBase):
         """执行任务计划"""
         task_plan.status = "running"
 
-        # 按依赖顺序执行任务
-        completed_steps = set()
+        # 按依赖顺序执行任务。只有真正成功的步骤才会解锁下游依赖。
+        succeeded_steps = set()
+        failed_steps = set()
+        skipped_steps = set()
         print(f"\n📋 [Manager] 开始执行{len(task_plan.steps)}个步骤...")
 
-        while len(completed_steps) < len(task_plan.steps):
+        while len(succeeded_steps) + len(failed_steps) + len(skipped_steps) < len(task_plan.steps):
+            terminal_steps = succeeded_steps | failed_steps | skipped_steps
+
+            # 依赖失败的步骤不能继续执行，直接标记为跳过。
+            for step in task_plan.steps:
+                step_id = step["step_id"]
+                if step_id in terminal_steps:
+                    continue
+                blocked_deps = [
+                    dep for dep in step.get("depends_on", [])
+                    if dep in failed_steps or dep in skipped_steps
+                ]
+                if blocked_deps:
+                    skipped_steps.add(step_id)
+                    task_plan.results[step_id] = {
+                        "status": "skipped",
+                        "agent": step.get("agent_name"),
+                        "error": f"上游步骤失败或跳过，无法执行依赖: {blocked_deps}",
+                    }
+                    print(f"   ⏭️ 步骤跳过: {step.get('agent_name')} - 依赖失败 {blocked_deps}")
+
+            terminal_steps = succeeded_steps | failed_steps | skipped_steps
+            if len(terminal_steps) >= len(task_plan.steps):
+                break
+
             # 找到可以执行的任务（依赖已满足）
             ready_steps = [
                 step for step in task_plan.steps
-                if step["step_id"] not in completed_steps
-                and all(dep in completed_steps for dep in step.get("depends_on", []))
+                if step["step_id"] not in terminal_steps
+                and all(dep in succeeded_steps for dep in step.get("depends_on", []))
             ]
 
             if not ready_steps:
-                print(f"⚠️ [Manager] 没有可执行的步骤，可能存在循环依赖")
+                print(f"⚠️ [Manager] 没有可执行的步骤，可能存在循环依赖或无法满足的依赖")
+                for step in task_plan.steps:
+                    step_id = step["step_id"]
+                    if step_id not in succeeded_steps and step_id not in failed_steps and step_id not in skipped_steps:
+                        failed_steps.add(step_id)
+                        task_plan.results[step_id] = {
+                            "status": "failed",
+                            "agent": step.get("agent_name"),
+                            "error": "依赖无法满足或存在循环依赖",
+                        }
                 break
 
             print(f"\n   🔄 本轮可执行步骤: {[s.get('agent_name') for s in ready_steps]}")
 
             # 并行执行准备好的任务
-            tasks = []
-            for step in ready_steps:
-                task = self._execute_step(step, task_plan)
-                tasks.append(task)
+            results = await asyncio.gather(
+                *(self._execute_step(step, task_plan) for step in ready_steps),
+                return_exceptions=True,
+            )
 
-            await asyncio.gather(*tasks)
+            for step, result in zip(ready_steps, results):
+                step_id = step["step_id"]
+                if isinstance(result, Exception):
+                    result = {
+                        "status": "failed",
+                        "agent": step.get("agent_name"),
+                        "error": str(result),
+                    }
 
-            for step in ready_steps:
-                completed_steps.add(step["step_id"])
-                print(f"   ✅ 步骤完成: {step.get('agent_name')} - {step.get('task', '')[:30]}...")
+                if not isinstance(result, dict):
+                    result = task_plan.results.get(step_id) or {
+                        "status": "failed",
+                        "agent": step.get("agent_name"),
+                        "error": "步骤未返回有效执行结果",
+                    }
 
-        task_plan.status = "completed"
-        print(f"\n✅ [Manager] 所有步骤执行完成")
+                task_plan.results[step_id] = result
+                if result.get("status") == "completed":
+                    succeeded_steps.add(step_id)
+                    print(f"   ✅ 步骤完成: {step.get('agent_name')} - {step.get('task', '')[:30]}...")
+                else:
+                    failed_steps.add(step_id)
+                    print(f"   ❌ 步骤失败: {step.get('agent_name')} - {result.get('error', '未知错误')}")
+
+        if failed_steps or skipped_steps:
+            task_plan.status = "failed"
+            print(f"\n⚠️ [Manager] 计划执行结束，成功={len(succeeded_steps)}，失败={len(failed_steps)}，跳过={len(skipped_steps)}")
+        else:
+            task_plan.status = "completed"
+            print(f"\n✅ [Manager] 所有步骤执行完成")
 
     def _extract_summary(self, content) -> str:
         """从 Agent 响应内容中提取纯文本摘要"""
@@ -529,11 +586,12 @@ class ManagerAgent(AgentBase):
         worker = self._workers.get(worker_id) or self._workers_by_name.get(agent_name)
         if not worker:
             print(f"      ❌ Worker {worker_id or agent_name} 未找到")
-            task_plan.results[step["step_id"]] = {
+            result = {
                 "status": "failed",
                 "error": f"Worker {worker_id or agent_name} 未找到"
             }
-            return
+            task_plan.results[step["step_id"]] = result
+            return result
         agent_name = worker.name
 
         # 发射 Worker 开始事件
@@ -600,13 +658,14 @@ class ManagerAgent(AgentBase):
             # 从摘要中提取文件路径，供下游步骤引用
             referenced_files = self._extract_file_paths(result_summary)
 
-            task_plan.results[step["step_id"]] = {
+            result = {
                 "status": "completed",
                 "agent": agent_name,
                 "result": response.content,      # 完整结果（供最终整合使用）
                 "summary": result_summary,        # 文本摘要（供下游Worker参考）
                 "referenced_files": referenced_files,  # 引用的文件路径
             }
+            task_plan.results[step["step_id"]] = result
 
             # 发射 Worker 完成事件
             self._emit("worker_done",
@@ -614,33 +673,38 @@ class ManagerAgent(AgentBase):
                 result=result_summary,
                 task=task_description
             )
+            return result
 
         except asyncio.TimeoutError:
             print(f"      ❌ {agent_name} 执行超时（{int(timeout_seconds)} 秒）")
-            task_plan.results[step["step_id"]] = {
+            result = {
                 "status": "failed",
                 "agent": agent_name,
                 "error": f"执行超时（{int(timeout_seconds)} 秒），任务未完成"
             }
+            task_plan.results[step["step_id"]] = result
             self._emit("worker_done",
                 agent_name=agent_name,
                 result=f"执行超时（{int(timeout_seconds)} 秒）",
                 task=task_description,
                 failed=True
             )
+            return result
         except Exception as e:
             print(f"      ❌ {agent_name} 执行失败: {e}")
-            task_plan.results[step["step_id"]] = {
+            result = {
                 "status": "failed",
                 "agent": agent_name,
                 "error": str(e)
             }
+            task_plan.results[step["step_id"]] = result
             self._emit("worker_done",
                 agent_name=agent_name,
                 result=f"执行失败: {e}",
                 task=task_description,
                 failed=True
             )
+            return result
         finally:
             # 清空 Worker 的独立 memory，避免上下文累积影响后续任务
             if worker._agent and hasattr(worker._agent, 'react_agent') and worker._agent.react_agent:

@@ -1,10 +1,10 @@
 """
-Per-user Session Manager (Phase 3)
-每个用户拥有独立的 Agent 运行时会话，互不干扰。
+Per-conversation Session Manager.
+每个用户的每个会话拥有独立的 Agent 运行时，避免多会话互相覆盖。
 """
 import asyncio
 import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 
 from agents import ChatAgent, ManagerAgent, WorkerAgent
@@ -18,17 +18,18 @@ SESSION_EXPIRE_SECONDS = 30 * 60
 
 @dataclass
 class UserSession:
-    """单个用户的 Agent 运行时会话"""
+    """单个用户、单个会话的 Agent 运行时会话"""
     user_id: str
+    conversation_id: Optional[str] = None
     initialized: bool = False
     agents: list = field(default_factory=list)
     manager: Optional[Any] = None
     workers: list = field(default_factory=list)
     use_manager_mode: bool = False
-    active_conversation_id: Optional[str] = None
     last_active: float = field(default_factory=time.time)
+    execution_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    # 场景注入状态（per-user）
+    # 场景注入状态（per-conversation）
     last_scene_key: Optional[str] = None
     last_scene_desc: Optional[str] = None
 
@@ -47,7 +48,6 @@ class UserSession:
         self.manager = None
         self.workers = []
         self.use_manager_mode = False
-        self.active_conversation_id = None
         self.last_scene_key = None
         self.last_scene_desc = None
 
@@ -56,36 +56,47 @@ class SessionManager:
     """管理所有用户的运行时会话"""
 
     def __init__(self):
-        self._sessions: Dict[str, UserSession] = {}
+        self._sessions: Dict[Tuple[str, str], UserSession] = {}
         self._lock = asyncio.Lock()
 
-    def get_session(self, user_id: str) -> UserSession:
-        """获取用户 session（不存在则创建空的）"""
-        if user_id not in self._sessions:
-            self._sessions[user_id] = UserSession(user_id=user_id)
-        session = self._sessions[user_id]
+    def _session_key(self, user_id: str, conversation_id: Optional[str] = None) -> Tuple[str, str]:
+        """生成运行时 session key；无会话 id 的兼容入口使用默认槽位。"""
+        return (user_id, conversation_id or "__default__")
+
+    def get_session(self, user_id: str, conversation_id: Optional[str] = None) -> UserSession:
+        """获取用户某个会话的 session（不存在则创建空的）"""
+        key = self._session_key(user_id, conversation_id)
+        if key not in self._sessions:
+            self._sessions[key] = UserSession(user_id=user_id, conversation_id=conversation_id)
+        session = self._sessions[key]
         session.touch()
         return session
 
-    def has_session(self, user_id: str) -> bool:
-        """检查用户是否有 session"""
-        return user_id in self._sessions and self._sessions[user_id].initialized
+    def has_session(self, user_id: str, conversation_id: Optional[str] = None) -> bool:
+        """检查用户某个会话是否有已初始化 session"""
+        key = self._session_key(user_id, conversation_id)
+        return key in self._sessions and self._sessions[key].initialized
 
-    def remove_session(self, user_id: str):
-        """移除用户 session"""
-        if user_id in self._sessions:
-            del self._sessions[user_id]
+    def remove_session(self, user_id: str, conversation_id: Optional[str] = None):
+        """移除运行时 session；未传 conversation_id 时移除该用户所有会话 runtime。"""
+        if conversation_id is not None:
+            self._sessions.pop(self._session_key(user_id, conversation_id), None)
+            return
+
+        for key in [key for key in self._sessions if key[0] == user_id]:
+            del self._sessions[key]
 
     def cleanup_expired(self):
         """清理过期 session"""
-        expired_ids = [
-            uid for uid, session in self._sessions.items()
+        expired_keys = [
+            key for key, session in self._sessions.items()
             if session.is_expired()
         ]
-        for uid in expired_ids:
-            print(f"🧹 清理过期 session: user_id={uid}")
-            del self._sessions[uid]
-        return len(expired_ids)
+        for key in expired_keys:
+            session = self._sessions[key]
+            print(f"🧹 清理过期 session: user_id={session.user_id}, conversation={session.conversation_id or 'default'}")
+            del self._sessions[key]
+        return len(expired_keys)
 
     @property
     def active_count(self) -> int:
@@ -99,19 +110,19 @@ class SessionManager:
         """
         from auth.user_managers import get_user_managers, get_user_tool_registry
 
-        session = self.get_session(user_id)
+        session = self.get_session(user_id, conversation_id)
 
-        # 如果已初始化且仍在同一会话文件工作区，直接返回
-        if session.initialized and session.active_conversation_id == conversation_id:
+        # 如果该用户会话 runtime 已初始化，直接返回
+        if session.initialized:
             return session
 
         async with self._lock:
             # 二次检查（防止并发重复初始化）
-            if session.initialized and session.active_conversation_id == conversation_id:
+            if session.initialized:
                 return session
 
             session.reset()
-            session.active_conversation_id = conversation_id
+            session.conversation_id = conversation_id
 
             # 获取用户专属配置管理器
             agents_mgr, manager_mgr, provider_mgr = get_user_managers(user_id)
@@ -137,16 +148,19 @@ class SessionManager:
             return session
 
     async def reinitialize_user_session(self, user_id: str, conversation_id: Optional[str] = None) -> UserSession:
-        """重新初始化用户会话（用户修改配置后调用）"""
+        """重新初始化用户会话。
+
+        用户级配置变更时会清除该用户所有 runtime；随后按需重建指定会话。
+        """
         from auth.user_managers import clear_user_runtime_caches
 
         # 清除配置缓存，确保重新加载文件
         clear_user_runtime_caches(user_id)
 
-        # 移除旧 session
+        # 移除该用户旧 runtime；配置是 user 级别，所有会话都需要重新加载
         self.remove_session(user_id)
 
-        # 重新初始化
+        # 重新初始化当前会话
         return await self.init_user_session(user_id, conversation_id)
 
     async def _init_manager_worker(
