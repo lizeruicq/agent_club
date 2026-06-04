@@ -9,6 +9,7 @@
 import json
 import os
 import shutil
+from datetime import datetime
 from typing import Any, Dict, List
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
@@ -45,6 +46,38 @@ def _conversation_output_path(user_id: str, conv_id: str) -> str:
     ud = get_user_data(user_id)
     safe_id = ud.sanitize_conversation_id(conv_id)
     return os.path.join(ud.output_dir, "conversations", safe_id)
+
+
+def _conversation_outputs_root(user_id: str) -> str:
+    return os.path.join(get_user_data(user_id).output_dir, "conversations")
+
+
+def _output_only_meta(user_id: str, conv_id: str) -> Dict[str, Any]:
+    output_path = _conversation_output_path(user_id, conv_id)
+    try:
+        mtime = os.path.getmtime(output_path)
+        updated_at = datetime.fromtimestamp(mtime).isoformat()
+    except OSError:
+        updated_at = ""
+    return {
+        "id": conv_id,
+        "title": f"未保存会话 {conv_id}",
+        "created_at": updated_at,
+        "updated_at": updated_at,
+        "message_count": 0,
+    }
+
+
+def _list_output_conversation_ids(user_id: str) -> List[str]:
+    root = _conversation_outputs_root(user_id)
+    if not os.path.isdir(root):
+        return []
+    result = []
+    for name in os.listdir(root):
+        path = os.path.join(root, name)
+        if os.path.isdir(path):
+            result.append(name)
+    return result
 
 
 def _take_snapshots(user_id: str) -> Dict[str, Any]:
@@ -89,15 +122,27 @@ class UpdateConversationRequest(BaseModel):
 @router.get("")
 async def list_conversations(user: dict = Depends(get_current_user)):
     """获取当前用户的会话元数据列表"""
-    return {"conversations": _mgr(user["id"]).list_meta(), "max": MAX_CONVERSATIONS}
+    user_id = user["id"]
+    metas = _mgr(user_id).list_meta()
+    known_ids = {meta.get("id") for meta in metas}
+    for conv_id in _list_output_conversation_ids(user_id):
+        if conv_id not in known_ids:
+            metas.append(_output_only_meta(user_id, conv_id))
+    metas.sort(key=lambda m: m.get("updated_at", ""), reverse=True)
+    return {"conversations": metas, "max": MAX_CONVERSATIONS}
 
 
 @router.get("/{conv_id}")
 async def get_conversation(conv_id: str, user: dict = Depends(get_current_user)):
     """获取会话详情（含 messages）"""
-    conv = _mgr(user["id"]).get(conv_id)
+    user_id = user["id"]
+    conv = _mgr(user_id).get(conv_id)
     if not conv:
-        raise HTTPException(status_code=404, detail="会话不存在")
+        output_path = _conversation_output_path(user_id, conv_id)
+        if not os.path.isdir(output_path):
+            raise HTTPException(status_code=404, detail="会话不存在")
+        meta = _output_only_meta(user_id, conv_id)
+        return {**meta, "messages": [], "snapshots": {}}
     return conv
 
 
@@ -152,8 +197,6 @@ async def update_conversation(
     user: dict = Depends(get_current_user),
 ):
     """更新已有会话的 messages 和当前配置快照，不改 title"""
-    if not req.messages:
-        raise HTTPException(status_code=400, detail="无消息可保存")
     user_id = user["id"]
     snapshots = _take_snapshots(user_id)
     conv = _mgr(user_id).update(conv_id, req.messages, snapshots)
@@ -166,9 +209,9 @@ async def update_conversation(
 async def delete_conversation(conv_id: str, user: dict = Depends(get_current_user)):
     user_id = user["id"]
     ok = _mgr(user_id).delete(conv_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="会话不存在")
     conv_output = _conversation_output_path(user_id, conv_id)
+    if not ok and not os.path.isdir(conv_output):
+        raise HTTPException(status_code=404, detail="会话不存在")
     if os.path.isdir(conv_output):
         shutil.rmtree(conv_output, ignore_errors=True)
     session_manager.remove_session(user_id, conv_id)
@@ -181,7 +224,15 @@ async def restore_conversation(conv_id: str, user: dict = Depends(get_current_us
     user_id = user["id"]
     conv = _mgr(user_id).get(conv_id)
     if not conv:
-        raise HTTPException(status_code=404, detail="会话不存在")
+        output_path = _conversation_output_path(user_id, conv_id)
+        if not os.path.isdir(output_path):
+            raise HTTPException(status_code=404, detail="会话不存在")
+        conv = {
+            "id": conv_id,
+            "title": f"未保存会话 {conv_id}",
+            "messages": [],
+            "snapshots": {},
+        }
 
     snapshots = conv.get("snapshots") or {}
     _apply_snapshots(user_id, snapshots)

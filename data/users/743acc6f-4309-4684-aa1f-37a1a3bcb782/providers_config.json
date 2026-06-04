@@ -2,12 +2,12 @@
   "providers": [
     {
       "id": "provider",
-      "name": "qwen3.5",
+      "name": "qwen3.6",
       "provider_type": "dashscope",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "api_key": "sk-xxxxxxxxxxx",
-      "model_id": "kimi-k2.6",
-      "model_name": "kimi-k2.6",
+      "api_key": "sk-a3c1e9897dd344278801f0c62c68bddf",
+      "model_id": "qwen3.6-35b-a3b",
+      "model_name": "qwen3.6-35b-a3b",
       "is_active": false
     }
   ],

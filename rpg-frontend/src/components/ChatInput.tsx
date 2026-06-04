@@ -2,14 +2,20 @@ import { useState, KeyboardEvent } from 'react'
 
 interface ChatInputProps {
   onSend: (text: string) => void
+  onStop?: () => void
   disabled?: boolean
+  isProcessing?: boolean
   placeholder?: string
 }
 
-export function ChatInput({ onSend, disabled, placeholder }: ChatInputProps) {
+export function ChatInput({ onSend, onStop, disabled, isProcessing, placeholder }: ChatInputProps) {
   const [text, setText] = useState('')
 
   const handleSend = () => {
+    if (isProcessing) {
+      onStop?.()
+      return
+    }
     if (text.trim() && !disabled) {
       onSend(text.trim())
       setText('')
@@ -32,15 +38,15 @@ export function ChatInput({ onSend, disabled, placeholder }: ChatInputProps) {
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder || '输入消息...'}
-        disabled={disabled}
+        disabled={disabled || isProcessing}
         maxLength={2000}
       />
       <button
-        className="send-button"
+        className={`send-button ${isProcessing ? 'stop-button' : ''}`}
         onClick={handleSend}
-        disabled={disabled || !text.trim()}
+        disabled={!isProcessing && (disabled || !text.trim())}
       >
-        {disabled ? '⚔️ ...' : '⚔️ 发送'}
+        {isProcessing ? '⏹ 中止' : '⚔️ 发送'}
       </button>
     </div>
   )

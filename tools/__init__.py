@@ -7,6 +7,8 @@ from typing import Dict, List, Optional, Callable, Any
 import logging
 import os
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from agentscope.tool import Toolkit
 from .builtin.file_io import FileWorkspace, workspace_context
 
@@ -15,6 +17,54 @@ logger = logging.getLogger(__name__)
 # 配置文件路径
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
 TOOLS_CONFIG_FILE = os.path.join(CONFIG_DIR, "tools_config.json")
+
+_TOOL_EVENT_CALLBACK: ContextVar[Optional[Callable[[Dict[str, Any]], None]]] = ContextVar(
+    "agent_tool_event_callback",
+    default=None,
+)
+
+
+@contextmanager
+def tool_event_context(callback: Optional[Callable[[Dict[str, Any]], None]]):
+    """在一次 Agent 执行期间绑定工具事件回调。"""
+    if callback is None:
+        yield
+        return
+    token = _TOOL_EVENT_CALLBACK.set(callback)
+    try:
+        yield
+    finally:
+        _TOOL_EVENT_CALLBACK.reset(token)
+
+
+def _truncate_tool_value(value: Any, limit: int = 600) -> str:
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "...[truncated]"
+
+
+def _tool_response_text(response: Any, limit: int = 800) -> str:
+    content = getattr(response, "content", response)
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text", item)))
+            else:
+                parts.append(str(item))
+        return _truncate_tool_value("\n".join(parts), limit)
+    return _truncate_tool_value(content, limit)
+
+
+def _emit_tool_event(event_type: str, **payload):
+    callback = _TOOL_EVENT_CALLBACK.get()
+    if not callback:
+        return
+    try:
+        callback({"type": event_type, **payload})
+    except Exception:
+        pass
 
 
 class ToolRegistry:
@@ -126,14 +176,33 @@ class ToolRegistry:
         logger.info(f"✅ 已注册 {len(self._toolkit.tools)} 个工具")
 
     def _bind_workspace(self, tool_func: Callable) -> Callable:
-        """给工具调用绑定当前用户 workspace。"""
+        """给工具调用绑定当前用户 workspace，并转发工具事件。"""
         if self._workspace is None:
             return tool_func
 
         @wraps(tool_func)
         async def wrapped(*args, **kwargs):
-            with workspace_context(self._workspace):
-                return await tool_func(*args, **kwargs)
+            tool_name = getattr(tool_func, "__name__", "tool")
+            safe_input = {
+                key: _truncate_tool_value(value)
+                for key, value in kwargs.items()
+                if key not in {"content"}
+            }
+            if "content" in kwargs:
+                safe_input["content"] = _truncate_tool_value(kwargs["content"])
+            _emit_tool_event("tool_start", tool_name=tool_name, input=safe_input)
+            try:
+                with workspace_context(self._workspace):
+                    response = await tool_func(*args, **kwargs)
+                _emit_tool_event(
+                    "tool_done",
+                    tool_name=tool_name,
+                    result=_tool_response_text(response),
+                )
+                return response
+            except Exception as e:
+                _emit_tool_event("tool_error", tool_name=tool_name, error=str(e))
+                raise
 
         return wrapped
 

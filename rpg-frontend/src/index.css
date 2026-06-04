@@ -220,6 +220,16 @@ html, body, #root {
   opacity: 1;
 }
 
+.window-ctrl-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.window-ctrl-btn:disabled:hover {
+  background: rgba(99, 110, 114, 0.4);
+  border-color: rgba(99, 110, 114, 0.6);
+}
+
 /* 隐藏状态下的悬浮按钮 */
 .chat-restore-fab {
   position: fixed;
@@ -717,6 +727,14 @@ html, body, #root {
 
 .send-button:active:not(:disabled) {
   transform: translateY(0);
+}
+
+.send-button.stop-button {
+  background: linear-gradient(135deg, #d63031, #e17055);
+}
+
+.send-button.stop-button:hover:not(:disabled) {
+  box-shadow: 0 4px 12px rgba(214, 48, 49, 0.4);
 }
 
 .send-button:disabled {

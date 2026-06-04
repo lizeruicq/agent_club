@@ -404,6 +404,20 @@ class ManagerAgent(AgentBase):
         plan_data = json.loads(json_str)
         return TaskPlanDecisionModel.model_validate(plan_data)
 
+    def _normalize_output_path(self, output: Optional[str], artifact_type: str) -> Optional[str]:
+        """根据产物类型规范化逻辑 output 路径。"""
+        output_file = (output or "").strip().replace("\\", "/").lstrip("/")
+        if not output_file:
+            return None
+        if output_file.startswith("output/"):
+            return output_file
+        filename = output_file.split("/")[-1]
+        if artifact_type in {"document", "analysis", "test_report"}:
+            return f"output/doc/{filename}"
+        if artifact_type == "html":
+            return f"output/preview/{filename}"
+        return f"output/{filename}"
+
     def _normalize_task_steps(self, steps: List[TaskPlanStepModel]) -> List[Dict[str, Any]]:
         """把 LLM 输出步骤规范化为内部执行协议。"""
         normalized: List[Dict[str, Any]] = []
@@ -428,7 +442,7 @@ class ManagerAgent(AgentBase):
                 "task": step.task.strip(),
                 "input": step.input.strip(),
                 "artifact_type": step.artifact_type,
-                "output": step.output.strip() if step.output else None,
+                "output": self._normalize_output_path(step.output, step.artifact_type),
                 "depends_on": depends_on,
                 "status": "pending",
                 "attempt": 1,
@@ -722,7 +736,7 @@ class ManagerAgent(AgentBase):
                 "task": raw_step.task.strip(),
                 "input": raw_step.input.strip(),
                 "artifact_type": raw_step.artifact_type,
-                "output": raw_step.output.strip() if raw_step.output else None,
+                "output": self._normalize_output_path(raw_step.output, raw_step.artifact_type),
                 "depends_on": depends_on,
                 "status": "pending",
                 "attempt": 1,
@@ -1188,7 +1202,23 @@ class WorkerAgent:
             role=msg.role
         )
 
-        return await self._agent.reply(enhanced_msg)
+        def on_tool_event(event: Dict[str, Any]):
+            if self._manager:
+                event_type = event.get("type", "tool")
+                self._manager._emit(
+                    f"worker_{event_type}",
+                    agent_name=self.name,
+                    tool_name=event.get("tool_name", ""),
+                    input=event.get("input"),
+                    result=event.get("result", ""),
+                    error=event.get("error", ""),
+                )
+
+        self._agent._tool_event_callback = on_tool_event
+        try:
+            return await self._agent.reply(enhanced_msg)
+        finally:
+            self._agent._tool_event_callback = None
 
     async def __call__(self, msg: Msg) -> Msg:
         return await self.reply(msg)

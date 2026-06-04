@@ -157,6 +157,16 @@ export const api = {
     return response.data
   },
 
+  async getConversation(convId: string): Promise<{
+    id: string
+    title: string
+    messages: ChatMessage[]
+    snapshots?: Record<string, any>
+  }> {
+    const response = await client.get(`/conversations/${convId}`)
+    return response.data
+  },
+
   /**
    * 保存当前消息+配置为新会话。
    * 当达到 max 上限时后端返回 409，返回值中 requiresConfirmation=true 让调用方弹确认框，

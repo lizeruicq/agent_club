@@ -533,6 +533,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest):
         """生成流式响应"""
         await session.execution_lock.acquire()
         manager_for_callback = None
+        manager_task = None
         try:
             if session.use_manager_mode and session.manager:
                 # Manager-Worker 模式流式输出 - 展示中间过程
@@ -571,7 +572,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest):
                         await event_queue.put(("done", None))
 
                 # 启动后台任务
-                asyncio.create_task(run_manager())
+                manager_task = asyncio.create_task(run_manager())
 
                 # 主循环：从队列取事件并 yield
                 final_answer = ""
@@ -602,6 +603,27 @@ async def chat_stream(request: Request, chat_request: ChatRequest):
                                 yield f"data: {json.dumps({'type': 'chunk', 'content': result, 'agent_name': agent_name, 'index': 1})}\n\n"
                             yield f"data: {json.dumps({'type': 'agent_done', 'agent_name': agent_name, 'index': 1})}\n\n"
                             await asyncio.sleep(0.2)
+
+                        elif event_type == "worker_tool_start":
+                            agent_name = data.get("agent_name", "Worker")
+                            tool_name = data.get("tool_name", "tool")
+                            tool_input = data.get("input") or {}
+                            content = f"\n\n[工具调用] {tool_name}\n输入: {tool_input}\n"
+                            yield f"data: {json.dumps({'type': 'chunk', 'content': content, 'agent_name': agent_name, 'index': 1})}\n\n"
+
+                        elif event_type == "worker_tool_done":
+                            agent_name = data.get("agent_name", "Worker")
+                            tool_name = data.get("tool_name", "tool")
+                            result = data.get("result", "")
+                            content = f"\n[工具结果] {tool_name}\n{result}\n"
+                            yield f"data: {json.dumps({'type': 'chunk', 'content': content, 'agent_name': agent_name, 'index': 1})}\n\n"
+
+                        elif event_type == "worker_tool_error":
+                            agent_name = data.get("agent_name", "Worker")
+                            tool_name = data.get("tool_name", "tool")
+                            error = data.get("error", "")
+                            content = f"\n[工具错误] {tool_name}: {error}\n"
+                            yield f"data: {json.dumps({'type': 'chunk', 'content': content, 'agent_name': agent_name, 'index': 1})}\n\n"
 
                         elif event_type == "manager_integrating":
                             # Manager 开始整合，发送开始事件
@@ -688,6 +710,12 @@ async def chat_stream(request: Request, chat_request: ChatRequest):
             print(f"❌ {error_msg}")
             yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
         finally:
+            if manager_task and not manager_task.done():
+                manager_task.cancel()
+                try:
+                    await manager_task
+                except asyncio.CancelledError:
+                    pass
             if manager_for_callback:
                 manager_for_callback._event_callback = None
             session.execution_lock.release()

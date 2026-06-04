@@ -34,6 +34,54 @@ function getInitialConversationId(): string {
   return createConversationId()
 }
 
+function currentConversationKey(userId?: string): string {
+  return userId ? `${CURRENT_CONVERSATION_KEY}:${userId}` : CURRENT_CONVERSATION_KEY
+}
+
+function draftKey(userId: string, conversationId: string): string {
+  return `agent_club_conversation_draft:${userId}:${conversationId}`
+}
+
+function normalizeMessagesForPersistence(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((msg) => ({ ...msg, isStreaming: false }))
+}
+
+function readConversationDraft(userId: string | undefined, conversationId: string): ChatMessage[] {
+  if (!userId || !conversationId) return []
+  try {
+    const raw = localStorage.getItem(draftKey(userId, conversationId))
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed?.messages) ? parsed.messages : []
+  } catch {
+    return []
+  }
+}
+
+function writeConversationDraft(userId: string | undefined, conversationId: string, messages: ChatMessage[]) {
+  if (!userId || !conversationId || messages.length === 0) return
+  try {
+    localStorage.setItem(
+      draftKey(userId, conversationId),
+      JSON.stringify({
+        updatedAt: Date.now(),
+        messages: normalizeMessagesForPersistence(messages),
+      })
+    )
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
+
+function clearConversationDraft(userId: string | undefined, conversationId: string) {
+  if (!userId || !conversationId) return
+  try {
+    localStorage.removeItem(draftKey(userId, conversationId))
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
+
 // 图标组件
 const ChatIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -151,6 +199,9 @@ function App() {
   const gameRef = useRef<Phaser.Game | null>(null)
   const sceneRef = useRef<ChatScene | null>(null)
   const agentsRef = useRef<AgentInfo[]>([])
+  const loadedConversationIdRef = useRef<string | null>(null)
+  const messagesRef = useRef<ChatMessage[]>([])
+  const streamCancelRef = useRef<(() => void) | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [robotStatus, setRobotStatus] = useState<RobotStatus>('idle')
   const [isProcessing, setIsProcessing] = useState(false)
@@ -158,6 +209,7 @@ function App() {
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [activeAgents, setActiveAgents] = useState<string[]>([])
   const [gameConfig, setGameConfig] = useState<GameConfig | null>(null)
+  const [conversationStorageUserId, setConversationStorageUserId] = useState<string | null>(null)
 
   // 加载游戏配置（登录后才加载）
   // 以前端本地 game-config.json 为准，只用后端的 currentScene 覆盖
@@ -254,12 +306,73 @@ function App() {
   const [currentConversationId, setCurrentConversationId] = useState<string>(() => getInitialConversationId())
 
   useEffect(() => {
+    if (!currentUser?.id) return
+    setConversationStorageUserId(null)
     try {
+      const saved = localStorage.getItem(currentConversationKey(currentUser.id))
+        || localStorage.getItem(CURRENT_CONVERSATION_KEY)
+      if (saved && saved.trim() && saved !== currentConversationId) {
+        setCurrentConversationId(saved)
+      }
+    } catch {
+      // Ignore localStorage read failures.
+    } finally {
+      setConversationStorageUserId(currentUser.id)
+    }
+  }, [currentUser?.id])
+
+  useEffect(() => {
+    if (!currentUser?.id) return
+    if (conversationStorageUserId !== currentUser.id) return
+    try {
+      localStorage.setItem(currentConversationKey(currentUser.id), currentConversationId)
       localStorage.setItem(CURRENT_CONVERSATION_KEY, currentConversationId)
     } catch {
       // Ignore localStorage write failures.
     }
-  }, [currentConversationId])
+  }, [currentConversationId, currentUser?.id, conversationStorageUserId])
+
+  useEffect(() => {
+    if (!isLoggedIn || !currentConversationId || messages.length > 0) return
+    if (currentUser?.id && conversationStorageUserId !== currentUser.id) return
+    if (loadedConversationIdRef.current === currentConversationId) return
+    loadedConversationIdRef.current = currentConversationId
+
+    const draftMessages = readConversationDraft(currentUser?.id, currentConversationId)
+    if (draftMessages.length) {
+      setMessages(draftMessages)
+      return
+    }
+
+    api.getConversation(currentConversationId)
+      .then((conversation) => {
+        if (conversation.messages?.length) {
+          setMessages(conversation.messages)
+        }
+      })
+      .catch((err: any) => {
+        if (err?.response?.status !== 404) {
+          console.warn('Restore current conversation after reload failed:', err)
+        }
+      })
+  }, [isLoggedIn, currentConversationId, currentUser?.id, conversationStorageUserId, messages.length])
+
+  useEffect(() => {
+    messagesRef.current = messages
+    if (messages.length > 0) {
+      writeConversationDraft(currentUser?.id, currentConversationId, messages)
+    }
+  }, [messages, currentConversationId, currentUser?.id])
+
+  useEffect(() => {
+    const saveDraftBeforeUnload = () => {
+      if (messagesRef.current.length > 0) {
+        writeConversationDraft(currentUser?.id, currentConversationId, messagesRef.current)
+      }
+    }
+    window.addEventListener('beforeunload', saveDraftBeforeUnload)
+    return () => window.removeEventListener('beforeunload', saveDraftBeforeUnload)
+  }, [currentConversationId, currentUser?.id])
 
   // 获取 Agent 列表（登录后才获取）
   useEffect(() => {
@@ -317,7 +430,9 @@ function App() {
       content: text,
       timestamp: Date.now()
     }
-    setMessages(prev => [...prev, userMessage])
+    const nextMessages = [...messagesRef.current, userMessage]
+    setMessages(nextMessages)
+    writeConversationDraft(currentUser?.id, currentConversationId, nextMessages)
     setIsProcessing(true)
     setRobotStatus('thinking')
 
@@ -329,7 +444,7 @@ function App() {
     const streamingContents = new Map<string, string>() // agentName -> accumulated content
 
     // 开始流式请求
-    api.chatStream(
+    streamCancelRef.current = api.chatStream(
       text,
       currentConversationId,
       (chunk) => {
@@ -412,6 +527,7 @@ function App() {
 
           case 'all_done':
             // 全部完成 - 恢复状态
+            streamCancelRef.current = null
             setTimeout(() => {
               sceneRef.current?.resetAgentHighlight()
               setRobotStatus('idle')
@@ -434,6 +550,7 @@ function App() {
             setRobotStatus('idle')
             setActiveAgents([])
             setIsProcessing(false)
+            streamCancelRef.current = null
             break
           }
         }
@@ -452,10 +569,43 @@ function App() {
         setRobotStatus('idle')
         setActiveAgents([])
         setIsProcessing(false)
+        streamCancelRef.current = null
       }
     )
 
-  }, [isProcessing, currentConversationId])
+  }, [isProcessing, currentConversationId, currentUser?.id])
+
+  const handleStopProcessing = useCallback(() => {
+    if (!isProcessing) return
+    streamCancelRef.current?.()
+    streamCancelRef.current = null
+    const stopMessage: ChatMessage = {
+      id: `stop_${Date.now()}`,
+      role: 'error',
+      content: '已手动中止当前执行',
+      timestamp: Date.now(),
+      isError: true
+    }
+    setMessages(prev => {
+      const nextMessages = [
+        ...prev.map(msg => msg.isStreaming ? { ...msg, isStreaming: false } : msg),
+        stopMessage,
+      ]
+      writeConversationDraft(currentUser?.id, currentConversationId, nextMessages)
+      return nextMessages
+    })
+    sceneRef.current?.resetAgentHighlight()
+    setRobotStatus('idle')
+    setActiveAgents([])
+    setIsProcessing(false)
+  }, [isProcessing, currentConversationId, currentUser?.id])
+
+  useEffect(() => {
+    return () => {
+      streamCancelRef.current?.()
+      streamCancelRef.current = null
+    }
+  }, [])
 
   // 同步机器人状态到场景 - 只对活跃 Agent 生效
   useEffect(() => {
@@ -478,24 +628,25 @@ function App() {
   // - 未绑定：创建新一条
   const persistCurrentToHistory = useCallback(async (): Promise<boolean> => {
     if (messages.length === 0) return true
+    const persistedMessages = normalizeMessagesForPersistence(messages)
     try {
       if (currentConversationId) {
         try {
-          await api.updateConversation(currentConversationId, messages)
+          await api.updateConversation(currentConversationId, persistedMessages)
           return true
         } catch (err: any) {
           // 如果原会话已被删除，回退到创建
           if (err?.response?.status !== 404) throw err
         }
       }
-      let result = await api.saveCurrentConversation(messages, false, currentConversationId)
+      let result = await api.saveCurrentConversation(persistedMessages, false, currentConversationId)
       if (result.requiresConfirmation) {
         const oldestTitle = result.oldest?.title || '最早的会话'
         const ok = window.confirm(
           `历史会话已达上限（${result.max} 条）。\n继续将删除最早的会话「${oldestTitle}」。\n是否继续？`
         )
         if (!ok) return false
-        result = await api.saveCurrentConversation(messages, true, currentConversationId)
+        result = await api.saveCurrentConversation(persistedMessages, true, currentConversationId)
       }
       return true
     } catch (err) {
@@ -504,6 +655,31 @@ function App() {
       return false
     }
   }, [messages, currentConversationId])
+
+  useEffect(() => {
+    if (!isLoggedIn || messages.length === 0) return
+
+    const timer = window.setTimeout(async () => {
+      const persistedMessages = normalizeMessagesForPersistence(messages)
+      try {
+        try {
+          await api.updateConversation(currentConversationId, persistedMessages)
+          return
+        } catch (err: any) {
+          if (err?.response?.status !== 404) throw err
+        }
+
+        const result = await api.saveCurrentConversation(persistedMessages, false, currentConversationId)
+        if (result.requiresConfirmation) {
+          console.warn('Auto-save skipped because conversation history reached max limit')
+        }
+      } catch (err) {
+        console.warn('Auto-save current conversation failed:', err)
+      }
+    }, 800)
+
+    return () => window.clearTimeout(timer)
+  }, [isLoggedIn, messages, currentConversationId])
 
   // 新对话：把当前持久化为历史 → 清空 messages + agent 记忆
   const handleNewConversation = useCallback(async () => {
@@ -524,6 +700,30 @@ function App() {
     setMessages([])
   }, [isProcessing, persistCurrentToHistory])
 
+  const handleClearCurrentConversation = useCallback(async () => {
+    if (isProcessing) {
+      alert('请先中止或等待当前回复完成')
+      return
+    }
+    if (messagesRef.current.length === 0) return
+    if (!window.confirm('确定清空当前会话的聊天记录吗？产物文件不会被删除。')) return
+
+    clearConversationDraft(currentUser?.id, currentConversationId)
+    setMessages([])
+    try {
+      await api.updateConversation(currentConversationId, [])
+    } catch (err: any) {
+      if (err?.response?.status !== 404) {
+        console.warn('Clear current conversation failed:', err)
+      }
+    }
+  }, [isProcessing, currentConversationId, currentUser?.id])
+
+  const handleOpenHistory = useCallback(async () => {
+    const saved = await persistCurrentToHistory()
+    if (saved) setHistoryOpen(true)
+  }, [persistCurrentToHistory])
+
   // 选中历史会话：把当前持久化 → restore 选中条 → 用快照覆盖前端状态
   const handleSelectConversation = useCallback(async (convId: string) => {
     if (isProcessing) {
@@ -534,7 +734,8 @@ function App() {
     if (!saved) return
     try {
       const restored = await api.restoreConversation(convId)
-      setMessages(restored.messages || [])
+      const draftMessages = readConversationDraft(currentUser?.id, restored.id)
+      setMessages(draftMessages.length ? draftMessages : restored.messages || [])
       setCurrentConversationId(restored.id)
       if (restored.game_config) {
         setGameConfig(restored.game_config as GameConfig)
@@ -550,7 +751,7 @@ function App() {
       console.error('Restore conversation failed:', err)
       alert('恢复对话失败: ' + (err as Error).message)
     }
-  }, [isProcessing, persistCurrentToHistory])
+  }, [isProcessing, persistCurrentToHistory, currentUser?.id])
 
   // 未登录时显示登录页
   if (!isLoggedIn) {
@@ -671,10 +872,19 @@ function App() {
                   {/* 历史会话 */}
                   <button
                     className="window-ctrl-btn"
-                    onClick={() => setHistoryOpen(true)}
+                    onClick={handleOpenHistory}
                     title="历史会话"
                   >
                     📚
+                  </button>
+                  {/* 清空当前聊天记录 */}
+                  <button
+                    className="window-ctrl-btn"
+                    onClick={handleClearCurrentConversation}
+                    disabled={isProcessing || messages.length === 0}
+                    title="清空当前会话聊天记录"
+                  >
+                    🧹
                   </button>
                   {/* 最小化（隐藏） */}
                   <button
@@ -746,7 +956,8 @@ function App() {
               <div className="chat-input-area">
                 <ChatInput
                   onSend={handlePlayerMessage}
-                  disabled={isProcessing}
+                  onStop={handleStopProcessing}
+                  isProcessing={isProcessing}
                   placeholder={isProcessing ? 'AI 思考中...' : '输入消息...'}
                 />
                 <div className="input-hint">
@@ -784,6 +995,7 @@ function App() {
         onSelect={handleSelectConversation}
         onDeleted={(id) => {
           if (id === currentConversationId) {
+            clearConversationDraft(currentUser?.id, id)
             const nextConversationId = createConversationId()
             setCurrentConversationId(nextConversationId)
             setMessages([])
