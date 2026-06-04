@@ -167,7 +167,7 @@ class ChatAgent(AgentBase):
             formatter=formatter,
             toolkit=toolkit,  # 注册工具
             memory=_MediaFilteringMemory(InMemoryMemory()),
-            max_iters=10,
+            max_iters=20,
         )
 
     def _create_system_prompt(self) -> str:

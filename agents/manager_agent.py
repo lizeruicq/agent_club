@@ -928,6 +928,45 @@ class ManagerAgent(AgentBase):
             return 600.0
         return 120.0
 
+    async def _ask_worker_to_repair_output(
+        self,
+        worker: "WorkerAgent",
+        step: Dict[str, Any],
+        previous_summary: str,
+        validation_error: str,
+    ) -> Optional[str]:
+        """让原 Worker 只补写声明产物，Manager 不代写内容。"""
+        output_file = (step.get("output") or "").strip()
+        if not output_file:
+            return validation_error
+
+        artifact_type = step.get("artifact_type") or "none"
+        repair_content = (
+            "【产物补救任务】\n"
+            f"你上一步已经完成了业务分析，但声明产物没有成功保存。\n"
+            f"校验错误: {validation_error}\n\n"
+            f"必须现在调用 write_file 保存文件: {output_file}\n"
+            "这次不要继续搜索、不要输出长篇解释、不要把工具调用写成普通文本。\n"
+            "只根据下面的上一轮结果整理主要产物内容并调用 write_file。\n"
+            "write_file 成功后，用一句话回复保存完成。\n\n"
+            f"产物类型: {artifact_type}\n"
+        )
+        if artifact_type == "data":
+            repair_content += (
+                "如果是 JSON，content 必须是合法 JSON 字符串，不能包含 Markdown 代码块、注释或解释文字。\n"
+            )
+        repair_content += f"\n【上一轮结果】\n{previous_summary}"
+
+        repair_msg = Msg(name=getattr(self, "name", "Manager"), content=repair_content, role="user")
+        try:
+            await asyncio.wait_for(worker.reply(repair_msg), timeout=180.0)
+        except asyncio.TimeoutError:
+            return f"{validation_error}；补写产物超时"
+        except Exception as e:
+            return f"{validation_error}；补写产物失败: {e}"
+
+        return await self._validate_step_output(step)
+
     async def _execute_step(self, step: Dict, task_plan: TaskPlan):
         """执行单个步骤"""
         step["output"] = self._normalize_output_path(
@@ -1021,6 +1060,33 @@ class ManagerAgent(AgentBase):
             referenced_files = self._extract_file_paths(result_summary)
             output_validation_error = await self._validate_step_output(step)
             if output_validation_error:
+                print(f"      ⚠️ {agent_name} 产物缺失，要求原 Worker 补写: {output_validation_error}")
+                repaired_error = await self._ask_worker_to_repair_output(
+                    worker=worker,
+                    step=step,
+                    previous_summary=result_summary,
+                    validation_error=output_validation_error,
+                )
+                if not repaired_error:
+                    output_file = step.get("output")
+                    if output_file and output_file not in referenced_files:
+                        referenced_files.append(output_file)
+                    result = {
+                        "status": "completed",
+                        "agent": agent_name,
+                        "result": response.content,
+                        "summary": result_summary,
+                        "referenced_files": referenced_files,
+                    }
+                    task_plan.results[step["step_id"]] = result
+                    self._emit("worker_done",
+                        agent_name=agent_name,
+                        result=f"产物已补写完成: {output_file}",
+                        task=task_description
+                    )
+                    return result
+
+                output_validation_error = repaired_error
                 print(f"      ❌ {agent_name} 产物校验失败: {output_validation_error}")
                 result = {
                     "status": "failed",

@@ -51,3 +51,7 @@ build/
 # Database and storage
 rag_relate(no_use)/qdrant_storage/
 rag_relate(no_use)/persist_data/
+/output/users/743acc6f-4309-4684-aa1f-37a1a3bcb782/conversations/conv_mpzoatz5_j74xzor4/data/travel_info.json
+/output/users/743acc6f-4309-4684-aa1f-37a1a3bcb782/conversations/conv_mpzoatz5_j74xzor4/doc/travel_recommendation.md
+/output/users/743acc6f-4309-4684-aa1f-37a1a3bcb782/conversations/conv_mpzoatz5_j74xzor4/output/data/travel_info.json
+/output/users/743acc6f-4309-4684-aa1f-37a1a3bcb782/conversations/conv_mpzoatz5_j74xzor4/train_query.py
