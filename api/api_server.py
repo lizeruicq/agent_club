@@ -631,6 +631,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest):
 
                         elif event_type == "manager_reviewing":
                             content = data.get("content", "正在评估团队成员的执行结果...")
+                            yield f"data: {json.dumps({'type': 'start', 'agent_name': manager.name, 'agent_role': manager.role, 'index': 0})}\n\n"
                             yield f"data: {json.dumps({'type': 'chunk', 'content': content, 'agent_name': manager.name, 'index': 0})}\n\n"
 
                         elif event_type == "plan_updated":
@@ -640,6 +641,7 @@ async def chat_stream(request: Request, chat_request: ChatRequest):
                                     f"{s.get('agent_name', 'Worker')} - {s.get('task', '')[:40]}"
                                     for s in added_steps
                                 )
+                                yield f"data: {json.dumps({'type': 'start', 'agent_name': manager.name, 'agent_role': manager.role, 'index': 0})}\n\n"
                                 yield f"data: {json.dumps({'type': 'chunk', 'content': content, 'agent_name': manager.name, 'index': 0})}\n\n"
 
                     elif kind == "final":

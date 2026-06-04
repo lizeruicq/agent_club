@@ -455,6 +455,18 @@ function App() {
           case 'agent_start':
             // 新 Agent 开始回复 - 创建空消息
             if (chunk.agent_name) {
+              const existingMessageId = streamingMessages.get(chunk.agent_name)
+              if (existingMessageId) {
+                setMessages(prev =>
+                  prev.map(msg =>
+                    msg.id === existingMessageId
+                      ? { ...msg, isStreaming: true, agentRole: msg.agentRole || chunk.agent_role }
+                      : msg
+                  )
+                )
+                break
+              }
+
               const messageId = `msg_${Date.now()}_${chunk.index}_${Math.random().toString(36).substr(2, 9)}`
               streamingMessages.set(chunk.agent_name, messageId)
               streamingContents.set(chunk.agent_name, '')
@@ -488,7 +500,24 @@ function App() {
           case 'chunk':
             // 接收内容片段 - 追加到对应消息
             if (chunk.agent_name && chunk.content) {
-              const messageId = streamingMessages.get(chunk.agent_name)
+              let messageId = streamingMessages.get(chunk.agent_name)
+              if (!messageId) {
+                messageId = `msg_${Date.now()}_${chunk.index ?? 0}_${Math.random().toString(36).substr(2, 9)}`
+                streamingMessages.set(chunk.agent_name, messageId)
+                streamingContents.set(chunk.agent_name, '')
+                setMessages(prev => [
+                  ...prev,
+                  {
+                    id: messageId!,
+                    role: 'assistant',
+                    content: '',
+                    timestamp: Date.now(),
+                    agentName: chunk.agent_name,
+                    agentRole: chunk.agent_role,
+                    isStreaming: true
+                  }
+                ])
+              }
               if (messageId) {
                 // 累计内容
                 const prevContent = streamingContents.get(chunk.agent_name) || ''

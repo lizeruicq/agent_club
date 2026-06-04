@@ -13,7 +13,7 @@ from agentscope.tool import Toolkit
 from pydantic import BaseModel, Field
 
 from tools import get_toolkit
-from tools.builtin.file_io import workspace_context
+from tools.builtin.file_io import workspace_context, _resolve_file_path
 
 
 MAX_REVIEW_ROUNDS = 3
@@ -317,6 +317,7 @@ class ManagerAgent(AgentBase):
 - artifact_type 表示该步骤主要产物类型：none、document、html、code、analysis、test_report、data。
 - 只有需要被用户查看、后续步骤读取或持久保存的产物，才填写 output；纯讨论、判断、协调类步骤使用 artifact_type="none"，output 可省略。
 - output 是给文件工具使用的逻辑保存目标，不要在任务说明中解释真实磁盘目录或用户目录映射。
+- data 产物请保存到 output/data/*.json；document/analysis/test_report 产物请保存到 output/doc/*；html 产物请保存到 output/preview/*.html。
 - 可交互 HTML 产物应尽量写成单文件，CSS/JavaScript 内联。
 - 如步骤依赖上游产物，请在 input 中明确需要读取的文件引用。
 
@@ -409,9 +410,26 @@ class ManagerAgent(AgentBase):
         output_file = (output or "").strip().replace("\\", "/").lstrip("/")
         if not output_file:
             return None
+        filename = output_file.split("/")[-1]
+
+        if artifact_type in {"document", "analysis", "test_report"}:
+            if output_file.startswith("output/doc/"):
+                return output_file
+            return f"output/doc/{filename}"
+
+        if artifact_type == "html":
+            if output_file.startswith("output/preview/"):
+                return output_file
+            return f"output/preview/{filename}"
+
+        if artifact_type == "data":
+            if output_file.startswith("output/data/"):
+                return output_file
+            return f"output/data/{filename}"
+
         if output_file.startswith("output/"):
             return output_file
-        filename = output_file.split("/")[-1]
+
         if artifact_type in {"document", "analysis", "test_report"}:
             return f"output/doc/{filename}"
         if artifact_type == "html":
@@ -656,8 +674,10 @@ class ManagerAgent(AgentBase):
 3. 追加步骤只能用于补救、重试或补齐缺失产物，不要删除或重排旧步骤。
 4. 如果当前结果已经可交付，必须返回 is_complete=true 且 new_steps=[]。
 5. 如果追加步骤是为了修复失败步骤，不要依赖失败步骤；可在 input 中说明失败原因，并只依赖已经成功的上游步骤。
+5a. 如果追加多个补救步骤之间存在先后关系，后续步骤必须依赖前一个补救步骤的 step_id。
 6. 每轮最多追加 {MAX_NEW_STEPS_PER_REVIEW} 个步骤，总步骤数最多 {MAX_TOTAL_STEPS} 个。
 7. output 是给文件工具使用的逻辑保存目标，不要解释真实磁盘目录或用户目录映射。
+8. data 产物请保存到 output/data/*.json；document/analysis/test_report 产物请保存到 output/doc/*；html 产物请保存到 output/preview/*.html。
 
 请只返回 JSON：
 {{
@@ -715,8 +735,10 @@ class ManagerAgent(AgentBase):
             return []
 
         completed_step_ids = self._step_ids_by_status(task_plan, "completed")
+        known_step_ids = {step["step_id"] for step in task_plan.steps}
         next_step_id = max((step["step_id"] for step in task_plan.steps), default=0) + 1
         added_steps: List[Dict[str, Any]] = []
+        remapped_new_step_ids: Dict[int, int] = {}
 
         for raw_step in review.new_steps[: min(MAX_NEW_STEPS_PER_REVIEW, remaining_slots)]:
             worker_id = raw_step.worker_id
@@ -728,7 +750,16 @@ class ManagerAgent(AgentBase):
                 print(f"   ⚠️ [Manager] 跳过复盘追加步骤，worker 不存在: {raw_step.worker_id or raw_step.agent_name}")
                 continue
 
-            depends_on = [dep for dep in raw_step.depends_on if dep in completed_step_ids]
+            depends_on: List[int] = []
+            for dep in raw_step.depends_on:
+                mapped_dep = remapped_new_step_ids.get(dep, dep)
+                if mapped_dep in completed_step_ids or mapped_dep in {s["step_id"] for s in added_steps}:
+                    depends_on.append(mapped_dep)
+                elif mapped_dep in known_step_ids:
+                    print(f"   ⚠️ [Manager] 忽略未完成依赖 {dep}，追加步骤不能依赖失败或未完成的旧步骤")
+                else:
+                    print(f"   ⚠️ [Manager] 忽略未知依赖 {dep}")
+
             step = {
                 "step_id": next_step_id,
                 "worker_id": worker_id,
@@ -745,6 +776,9 @@ class ManagerAgent(AgentBase):
             }
             task_plan.steps.append(step)
             added_steps.append(step)
+            known_step_ids.add(next_step_id)
+            if raw_step.step_id:
+                remapped_new_step_ids[raw_step.step_id] = next_step_id
             print(f"   ➕ [Manager] 追加步骤 {next_step_id}: {worker.name} -> {step['task'][:50]}...")
             next_step_id += 1
 
@@ -765,13 +799,16 @@ class ManagerAgent(AgentBase):
 
     async def _validate_step_output(self, step: Dict[str, Any]) -> Optional[str]:
         """校验声明的 output 是否已经可读取。"""
-        output_file = (step.get("output") or "").strip()
+        artifact_type = step.get("artifact_type") or "none"
+        output_file = self._normalize_output_path(step.get("output"), artifact_type) or ""
+        step["output"] = output_file
         if not output_file:
             return None
 
-        artifact_type = step.get("artifact_type") or "none"
         if artifact_type == "html" and not output_file.lower().endswith(".html"):
             return f"HTML 产物应保存为 .html 文件: {output_file}"
+        if artifact_type == "data" and not output_file.lower().endswith(".json"):
+            return f"data 产物应保存为 .json 文件: {output_file}"
 
         read_tool = self.toolkit.tools.get("read_file") if self.toolkit else None
         if not read_tool:
@@ -787,6 +824,15 @@ class ManagerAgent(AgentBase):
                 return f"声明的产物文件未生成或不可读: {output_file}；{text[:180]}"
         except Exception as e:
             return f"声明的产物文件无法校验: {output_file}；{e}"
+
+        if artifact_type == "data":
+            try:
+                with workspace_context(self._file_workspace):
+                    resolved_path = _resolve_file_path(output_file)
+                with open(resolved_path, "r", encoding="utf-8") as f:
+                    json.load(f)
+            except Exception as e:
+                return f"JSON 产物无法解析: {output_file}；{e}"
 
         return None
 
@@ -865,6 +911,10 @@ class ManagerAgent(AgentBase):
         elif output_file.startswith("output/preview/") or artifact_type == "html":
             file_notes.append("【HTML保存】请将可预览的 HTML 保存到【产出要求】指定的位置。")
             file_notes.append("【HTML要求】除非用户明确要求多文件项目，HTML 应尽量包含内联 CSS 和 JavaScript，完成后不需要打开浏览器预览、截图或发送文件。")
+        elif output_file.startswith("output/data/") or artifact_type == "data":
+            file_notes.append("【数据保存】请将结构化数据保存到【产出要求】指定的位置。")
+            if output_file.lower().endswith(".json"):
+                file_notes.append("【JSON要求】必须写入可被 json.loads 解析的合法 JSON；不要写 Markdown 代码块、解释文字或尾随注释。")
         else:
             file_notes.append("【文件保存】请将本步骤需要持久化的产物保存到【产出要求】指定的位置。")
 
@@ -880,6 +930,10 @@ class ManagerAgent(AgentBase):
 
     async def _execute_step(self, step: Dict, task_plan: TaskPlan):
         """执行单个步骤"""
+        step["output"] = self._normalize_output_path(
+            step.get("output"),
+            step.get("artifact_type") or "none",
+        )
         worker_id = step.get("worker_id")
         agent_name = step.get("agent_name")
         task_description = step.get("task")
